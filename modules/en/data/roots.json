@@ -1,5 +1,5 @@
 {
- "version": "2026-10-16",
+ "version": "2026-10-21",
  "note": "字首字根牌組（theme root）morph 統一後的總表；k 對應卡片 morph[].k；words/ids 為出現的單字",
  "entries": [
   {
@@ -4298,21 +4298,6 @@
     "rt-330",
     "rt-978",
     "rt-981"
-   ]
-  },
-  {
-   "k": "r:commerce",
-   "t": "root",
-   "form": "commerce",
-   "zh": "商業",
-   "variants": [
-    "commerce"
-   ],
-   "words": [
-    "﻿commercialism"
-   ],
-   "ids": [
-    "rt-744"
    ]
   },
   {
@@ -9393,14 +9378,12 @@
     "renewal",
     "renovation",
     "urban renewal",
-    "﻿urban renewal",
     "renovate"
    ],
    "ids": [
     "rt-531",
     "rt-532",
     "rt-1221",
-    "rt-653",
     "rt-1022"
    ]
   },
@@ -14191,12 +14174,10 @@
     "urban"
    ],
    "words": [
-    "urban renewal",
-    "﻿urban renewal"
+    "urban renewal"
    ],
    "ids": [
-    "rt-1221",
-    "rt-653"
+    "rt-1221"
    ]
   },
   {
@@ -15407,7 +15388,6 @@
     "collateral",
     "colloquial",
     "colonial",
-    "﻿commercialism",
     "congenital",
     "cordial",
     "crucial",
@@ -15482,7 +15462,6 @@
     "rt-1293",
     "rt-1294",
     "rt-1295",
-    "rt-744",
     "rt-756",
     "rt-773",
     "rt-790",
@@ -15528,15 +15507,13 @@
     "renewal",
     "rental",
     "survival",
-    "urban renewal",
-    "﻿urban renewal"
+    "urban renewal"
    ],
    "ids": [
     "rt-531",
     "rt-533",
     "rt-603",
-    "rt-1221",
-    "rt-653"
+    "rt-1221"
    ]
   },
   {
@@ -16973,7 +16950,6 @@
     "sexism",
     "activism",
     "commercialism",
-    "﻿commercialism",
     "humanism",
     "nationalism",
     "organism",
@@ -16987,7 +16963,6 @@
     "rt-564",
     "rt-686",
     "rt-1297",
-    "rt-744",
     "rt-916",
     "rt-959",
     "rt-976",
