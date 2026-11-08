@@ -1002,7 +1002,7 @@ window.addEventListener('orientationchange', ()=>{ syncTabsSafeArea(); ensureBot
 function render(){
   renderGlobalBanner();
   gdRenderChip();
-  const dueN = allV().filter(w=>{const s=store.vsrs[w.id]; return !s || s.due<=today();}).length;
+  const dueN = vTodayN().total;
   document.getElementById('tabs').innerHTML = TABS.map(t=>{
     const badge = (t.key==='vocab' && dueN>0) ? '<span class="n">'+dueN+'</span>' : '';
     return '<button role="tab" data-act="nav" data-tab="'+t.key+'" class="'+(ui.tab===t.key?'on':'')+'" aria-selected="'+(ui.tab===t.key)+'"><span class="tab-ic">'+t.icon+'</span><span class="tab-tx">'+t.name+badge+'</span></button>';
@@ -1606,7 +1606,7 @@ function rHome(){
   const acc = pct(C,A);
   const vAll=allV();
   const mastered = vAll.filter(w=>{const s=store.vsrs[w.id]; return s && s.box>=3;}).length;
-  const dueN = vAll.filter(w=>{const s=store.vsrs[w.id]; return !s || s.due<=today();}).length;
+  const vToday = vTodayN(), dueN = vToday.total;
   const wrongN = qs.filter(q=>{const s=store.qstats[q.id]; return s && s.lw;}).length;
   const sentDue = sentDueN();
   const isFresh = Object.keys(store.vsrs).length===0 && Object.keys(store.history).length===0;
@@ -1653,7 +1653,7 @@ function rHome(){
     <div style="font-size:15px">
       ${isFresh
         ? '👋 單字卡會依記憶排程逐步出現，新手建議先從一批開始。'
-        : (dueN>0 ? '📮 今日先複習 <b>'+todayBatch+'</b> 張'+(dueN>cap?'（累積到期 '+dueN+' 張）':'')+(estMin>0?'　·　約 '+estMin+' 分鐘':'') : '✅ 單字卡都複習完了')
+        : (dueN>0 ? '📮 今日單字 <b>'+todayBatch+'</b> 張（到期複習 '+vToday.rev+'・新字 '+vToday.newN+'）'+(dueN>cap?'，分批練':'')+(estMin>0?'　·　約 '+estMin+' 分鐘':'') : '✅ 單字卡都複習完了')
       }
       ${sentReady() ? '<div style="margin-top:6px">🧩 組句到期 <b>'+sentDue+'</b> 題</div>' : ''}
       ${!isFresh && wrongN>0 ? '　·　錯題本還有 <b>'+wrongN+'</b> 題待消滅' : ''}
@@ -1796,6 +1796,13 @@ function mergeStore(local, incoming){
     const ln = local.meta.sentNew;
     if(incSN.day>ln.day) local.meta.sentNew={day:incSN.day,count:incSN.count||0};
     else if(incSN.day===ln.day) ln.count=Math.max(ln.count,incSN.count||0);
+  }
+  /* 單字卡今日新字計數：同一天取較大值，較新的一天覆蓋 */
+  const incVN = (incoming.meta && incoming.meta.vocabNew) || null;
+  if(incVN && typeof incVN.day==='number' && typeof incVN.count==='number'){
+    const lv = local.meta.vocabNew;
+    if(!lv || typeof lv.day!=='number' || incVN.day>lv.day) local.meta.vocabNew={day:incVN.day,count:incVN.count};
+    else if(incVN.day===lv.day) lv.count=Math.max(lv.count||0,incVN.count);
   }
   const incQ = incoming.qstats||{};
   for(const id in incQ){
@@ -2075,21 +2082,68 @@ function vDueList(){
 function vBrowseList(){
   return byStarsDesc(allV().filter(w=>(ui.vocab.theme==='all'||w.theme===ui.vocab.theme) && starOk(w)));
 }
-/* 佇列：已複習過的到期卡（打散）在前，新卡依星等高到低（同星等維持原順序）補在後 */
-function buildVQueue(){
+/* ── 單字卡排程 ──
+   舊版：到期複習卡全排前面、新卡依「星等＋資料檔順序」固定排後面，
+   造成 (1) 每次都抽到同一批新字（資料檔最前面的 office 主題），
+        (2) 複習卡一多就把整批塞滿，後面的字永遠輪不到。
+   新版：
+   - 新字依星等「加權隨機」抽（★5 機率最高但不是固定順序），各主題都會輪到；
+   - 每天新字有配額（VOCAB_DAILY_NEW，跨批次、跨裝置合併累計）；
+   - 每批至少保留 VOCAB_NEW_SHARE 的位置給新字，不會被到期複習完全擠掉；
+   - 到期複習卡逾期越久越優先，新字平均穿插在複習卡之間。 */
+const VOCAB_DAILY_NEW = 20;
+const VOCAB_NEW_SHARE = 0.3;
+const VOCAB_EXTRA_NEW = 10;               // 今日配額用完後，「再學新字」一次加練的數量
+const STAR_WEIGHT = {5:8, 4:4, 3:2, 2:1}; // 新字抽樣權重（相對機率）
+function vCap(){ return (store.meta && store.meta.dailyCap) || 50; }
+function vNewMeta(){
+  if(!store.meta || typeof store.meta!=='object') store.meta={};
+  let n=store.meta.vocabNew;
+  if(!n || typeof n!=='object' || typeof n.day!=='number' || typeof n.count!=='number') n=store.meta.vocabNew={day:0,count:0};
+  if(n.day!==today()){ n.day=today(); n.count=0; }
+  return n;
+}
+function vNewLeft(){ return Math.max(0, VOCAB_DAILY_NEW - vNewMeta().count); }
+/* 加權隨機排列（Efraimidis–Spirakis）：權重越高越可能排前面，但每次結果不同 */
+function weightedShuffle(list, wf){
+  return list.map(x=>[x, Math.pow(Math.random(), 1/Math.max(1e-6, wf(x)))]).sort((a,b)=>b[1]-a[1]).map(p=>p[0]);
+}
+function vStarWeight(w){ return STAR_WEIGHT[wStars(w)] || 1; }
+/* 目前主題／星等篩選下：到期的複習卡、未學過的新字、今天還能引入幾個新字 */
+function vDuePlan(){
   const list = vDueList();
-  const seen = shuffle(list.filter(w=>vReviewed(w.id)));
-  const fresh = byStarsDesc(list.filter(w=>!vReviewed(w.id)));
-  const cap = (store.meta && store.meta.dailyCap) || 50;
-  ui.vocab.queue = seen.concat(fresh).slice(0,cap).map(w=>w.id);
-  ui.vocab.idx=0; ui.vocab.flip=false; ui.vocab.done=0;
+  const rev = list.filter(w=>vReviewed(w.id));
+  const fresh = list.filter(w=>!vReviewed(w.id));
+  return {rev, fresh, newLeft: Math.min(vNewLeft(), fresh.length)};
+}
+/* 今天「到期複習＋可學新字」的張數（不看篩選；分頁徽章與總覽用） */
+function vTodayN(){
+  const t=today(); let rev=0, fresh=0;
+  for(const w of allV()){
+    const s=store.vsrs[w.id];
+    if(s && s.seen>0){ if(s.due<=t) rev++; }
+    else fresh++;
+  }
+  return {rev, newN: Math.min(vNewLeft(), fresh), total: rev + Math.min(vNewLeft(), fresh)};
+}
+/* 佇列：到期複習卡（逾期久的優先，同日隨機）＋加權隨機抽的新字，新字平均穿插其中。
+   extraNew：今日配額用完後使用者主動加練的新字數 */
+function buildVQueue(extraNew){
+  const V=ui.vocab, cap=vCap(), p=vDuePlan();
+  const newCap = Math.min(p.fresh.length, extraNew ? extraNew : p.newLeft);
+  const reserve = Math.min(newCap, Math.ceil(cap*VOCAB_NEW_SHARE));
+  const revSorted = shuffle(p.rev).sort((a,b)=>store.vsrs[a.id].due - store.vsrs[b.id].due);
+  const revPick = extraNew ? [] : shuffle(revSorted.slice(0, cap-reserve));
+  const newPick = weightedShuffle(p.fresh, vStarWeight).slice(0, Math.min(newCap, cap-revPick.length));
+  const keyed = revPick.map((w,i)=>[w,(i+0.5)/revPick.length]).concat(newPick.map((w,i)=>[w,(i+0.5)/newPick.length]));
+  V.queue = keyed.sort((a,b)=>a[1]-b[1]).map(x=>x[0].id);
+  V.idx=0; V.flip=false; V.done=0;
 }
 function vBatchBadge(){
   if(ui.vocab.mode!=='due') return '';
-  const dueN = vDueList().length;
-  const cap = (store.meta && store.meta.dailyCap) || 50;
-  if(dueN<=cap) return '';
-  return '<div class="faint" style="font-size:12.5px;margin:-4px 0 12px">今日先複習 '+cap+'（累積到期 '+dueN+'）</div>';
+  const p=vDuePlan(), cap=vCap();
+  return '<div class="faint" style="font-size:12.5px;margin:-4px 0 12px">到期複習 '+p.rev.length+' 張・今日新字 '+vNewMeta().count+'/'+VOCAB_DAILY_NEW
+    +(p.rev.length+p.newLeft>cap?'（每批最多 '+cap+' 張）':'')+'</div>';
 }
 function rVocab(){
   const V=ui.vocab;
@@ -2107,7 +2161,7 @@ function rVocab(){
   const head = modeRow+chips+'<div class="v-subs">'+starRow+spellRow+'</div>';
   if(V.mode==='guess') return head+rGuess();
   if(V.mode==='fam') return head+rFam();
-  const modeSel = '<div class="faint" style="font-size:13px;margin-bottom:10px">間隔重複：答「記得」的字會隔越來越久才再出現；新字依多益星等由高到低出現</div>'+
+  const modeSel = '<div class="faint" style="font-size:13px;margin-bottom:10px">間隔重複：答「記得」的字會隔越來越久才再出現；每天新字 '+VOCAB_DAILY_NEW+' 個，依多益星等加權隨機抽、穿插在複習卡中</div>'+
     vBatchBadge()+
     `<details style="margin-bottom:12px"><summary><span role="button" aria-label="評分鈕說明">❓ 評分鈕代表什麼？</span></summary>
       <div style="font-size:13.5px;color:var(--ink-soft);margin-top:8px;line-height:1.7">
@@ -2134,19 +2188,22 @@ function rVocab(){
   /* 到期複習模式 */
   if(!V.queue.length && !V.done) buildVQueue();
   if(V.idx>=V.queue.length){
-    const remaining = vDueList().length;
+    const p = vDuePlan();
+    const remaining = p.rev.length + p.newLeft;
     if(remaining>0){
       return head+modeSel+`<div class="card empty" style="padding:48px 16px">
         <div style="font-size:40px;margin-bottom:8px">🎉</div>
         <div style="font-size:17px;font-weight:700;color:var(--ink)">本批完成 🎉</div>
-        <p class="muted" style="font-size:14px">這批複習了 ${V.done} 張，還有 ${remaining} 張到期未複習。</p>
+        <p class="muted" style="font-size:14px">這批練了 ${V.done} 張，還有到期複習 ${p.rev.length} 張、今日新字 ${p.newLeft} 個。</p>
         <button class="btn primary small" data-act="vNextBatch">再練一批（還有 ${remaining} 張）</button>
       </div>`;
     }
+    const extra = Math.min(VOCAB_EXTRA_NEW, p.fresh.length);
     return head+modeSel+`<div class="card empty" style="padding:48px 16px">
       <div style="font-size:40px;margin-bottom:8px">🎉</div>
       <div style="font-size:17px;font-weight:700;color:var(--ink)">今天的到期單字複習完畢</div>
-      <p class="muted" style="font-size:14px">共複習 ${V.done} 張。想加練可切到「自由瀏覽」。</p>
+      <p class="muted" style="font-size:14px">共練了 ${V.done} 張；${p.fresh.length?'今日新字配額（'+VOCAB_DAILY_NEW+' 個）已用完，此篩選還有 '+p.fresh.length+' 個字沒學過。':'此篩選的單字都學過了，想加練可切到「自由瀏覽」。'}</p>
+      ${extra>0?`<button class="btn primary small" data-act="vMoreNew">再學 ${extra} 個新字</button> `:''}
       <button class="btn ghost small" data-act="vRebuild">重新檢查到期卡</button>
     </div>`;
   }
@@ -2157,7 +2214,7 @@ function rVocab(){
   const spWrong = V.spell && V.spell.id===w.id && V.spell.wrong;
   return head+modeSel+`
     <div class="v-top" style="margin-bottom:8px">
-      <span class="faint" style="font-variant-numeric:tabular-nums">第 ${V.done+1} 張 · 剩 ${V.queue.length-V.idx} 張</span>
+      <span class="faint" style="font-variant-numeric:tabular-nums">第 ${V.done+1} 張 · 剩 ${V.queue.length-V.idx} 張${s.seen?'':' · <b style="color:var(--pine-mid)">新字</b>'}</span>
       <span class="boxdots" title="熟練度（盒 ${s.box}/4）">${[0,1,2,3,4].map(i=>'<i class="'+(i<=s.box&&s.seen?'f':'')+'"></i>').join('')}</span>
     </div>
     ${fcHtml(w,false)}
@@ -2787,6 +2844,7 @@ const ACTIONS = {
   vNext(){ const n=vBrowseList().length; ui.vocab.browseIdx=(ui.vocab.browseIdx+1)%n; ui.vocab.flip=false; render(); },
   vRebuild(){ ui.vocab.done=0; buildVQueue(); render(); },
   vNextBatch(){ ui.vocab.done=0; buildVQueue(); render(); },
+  vMoreNew(){ ui.vocab.done=0; buildVQueue(VOCAB_EXTRA_NEW); render(); },
   goDataFresh(){
     ui.backupShow=true; render();
     const el=document.getElementById('data-card'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'});
@@ -2825,6 +2883,7 @@ const ACTIONS = {
   vGrade(d){
     const V=ui.vocab, id=V.queue[V.idx], s=vsrs(id);
     let g=+d.g;
+    if(!s.seen) vNewMeta().count++;                                // 第一次評分＝今天引入一個新字
     if(g===2 && V.spell && V.spell.id===id && V.spell.wrong) g=1;   // 拼錯過：視為需再複習（最多排到明天）
     s.seen++;
     if(g===0){ s.box=0; s.due=today(); V.queue.push(id); }        // 不熟：今天排隊尾再出現
