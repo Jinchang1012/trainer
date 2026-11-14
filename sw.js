@@ -1,13 +1,15 @@
 /* 語言訓練場 Service Worker
  * 策略：network-first（有網路永遠拿最新版），失敗時回退 cache（離線可開）。
  */
-const CACHE_NAME = 'langhub-v7';
+const CACHE_NAME = 'langhub-v8';
 const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
+  './icon.svg',
+  './apple-touch-icon.png',
   './modules.js',
   './modules/en/index.html',
   './modules/fr/index.html',
