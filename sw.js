@@ -1,7 +1,7 @@
 /* 語言訓練場 Service Worker
  * 策略：network-first（有網路永遠拿最新版），失敗時回退 cache（離線可開）。
  */
-const CACHE_NAME = 'langhub-v5';
+const CACHE_NAME = 'langhub-v6';
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -18,7 +18,8 @@ const PRECACHE_URLS = [
   './modules/en/data/sentences.js',
   './modules/en/data/questions.js',
   './modules/en/data/families.js',
-  './modules/en/data/synsets.js'
+  './modules/en/data/synsets.js',
+  './modules/en/data/phrases.js'
 ];
 
 self.addEventListener('install', (event) => {
