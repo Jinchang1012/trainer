@@ -560,6 +560,7 @@ body.in-sess #app{padding-bottom:28px}
 <link rel="stylesheet" href="../shared/sentence-engine.css">
 <script src="../shared/sentence-engine.js"></script>
 <script src="../shared/family-engine.js"></script>
+<script src="../shared/fsrs.js"></script>
 <script src="data/sentences.js"></script>
 <script src="data/questions.js"></script>
 <script src="data/families.js"></script>
@@ -618,8 +619,34 @@ const THEMES = [
 const LEVEL_NAMES = {1:'基礎',2:'中階',3:'進階'};
 function levelName(n){ return LEVEL_NAMES[n]||LEVEL_NAMES[2]; }
 const SRS_IV = [0,1,3,7,14];          // Leitner 盒 0-4 的複習間隔（天）；錯句本沿用
-const V_IV = [0,1,3,7,14,30,60,120];  // 單字卡：盒 0-7 的複習間隔（天）。盒 0-4 與舊版相同，熟字再拉長到 30／60／120 天
+const V_IV = [0,1,3,7,14,30,60,120];  // 單字卡熟練度 0-7 級對應的間隔門檻（天）：把 FSRS 排到的間隔換算成級數，也用來換算舊版 Leitner 盒
 const V_BOX_MAX = 7;
+const V_MAX_IV = 365;                 // 單字卡最長複習間隔（天）
+/* ── 單字卡排程：FSRS-6（modules/shared/fsrs.js）──
+   每張卡存 s（穩定度，天）、d（難度 1~10）、last（上次作答的日序號）、due（下次到期日）。
+   box 仍保留但改由「排到的間隔」推得（0-7 級），供題型升級、「熟練」統計與舊版資料相容。
+   舊紀錄（只有 box／due）在下一次作答時換算：穩定度＝該盒的間隔、上次複習日＝到期日−間隔。
+   作答對應：答對＝Good(3)、答錯＝Again(1)；翻卡自評的「有點忘」＝Hard(2)。 */
+function boxOfIv(iv){ let b=0; for(let i=1;i<V_IV.length;i++) if(iv>=V_IV[i]) b=i; return b; }
+function vMem(st){
+  if(typeof st.s==='number' && st.s>0 && typeof st.d==='number' && st.d>=1) return {s:st.s, d:st.d, last:(typeof st.last==='number'?st.last:today())};
+  if(!st.seen) return null;                                   // 還沒學過
+  const iv=V_IV[Math.min(V_BOX_MAX, Math.max(0, st.box||0))];
+  return {s:Math.max(0.5, iv), d:Math.min(10, FSRS6.initD(3)+Math.min(3, st.lapses||0)*0.8), last:(typeof st.due==='number'?st.due:today())-iv};
+}
+function vNextMem(st, g){ const m=vMem(st); return FSRS6.next(m?{s:m.s,d:m.d}:null, m?Math.max(0, today()-m.last):0, g); }
+/* 若現在以 g 作答，會排到幾天後（不改資料；按鈕上的預告用） */
+function vNextIv(st, g){ return FSRS6.interval(vNextMem(st,g).s, prefs().retention, V_MAX_IV); }
+/* 目前排到的間隔（天）：FSRS 狀態優先，舊紀錄用盒距 */
+function vCurIv(st){ return (st && typeof st.s==='number' && st.s>0) ? FSRS6.interval(st.s, prefs().retention, V_MAX_IV) : V_IV[Math.min(V_BOX_MAX, Math.max(0, (st&&st.box)||0))]; }
+/* 套用一次作答並排下次到期日，回傳間隔天數 */
+function vApply(st, g){
+  const had=!!vMem(st), n=vNextMem(st,g), iv=FSRS6.interval(n.s, prefs().retention, V_MAX_IV);
+  st.s=Math.round(n.s*1e4)/1e4; st.d=Math.round(n.d*1e4)/1e4; st.last=today();
+  st.due=today()+iv; st.box=boxOfIv(iv);
+  if(g===1 && had) st.lapses=(st.lapses||0)+1;
+  return iv;
+}
 const LS_KEY = 'langhub_en_v1';       // 未登入（訪客）紀錄；也是舊版唯一的 key
 
 /* ── 儲存層 ── */
@@ -1788,6 +1815,7 @@ const FOCUS = [
   {key:'root',  name:'字首字根'},
 ];
 const DAILY_NEW_OPTS = [5,10,15,20];
+const RETENTION_OPTS = [0.85,0.9,0.95];   // FSRS 目標保留率：到期那天預計還記得的機率
 function focusOf(w){ return w.theme==='work' ? 'work' : w.theme==='daily' ? 'daily' : w.theme==='root' ? 'root' : 'toeic'; }
 function prefs(){
   if(!store.meta || typeof store.meta!=='object') store.meta={};
@@ -1799,6 +1827,7 @@ function prefs(){
   if(DAILY_NEW_OPTS.indexOf(p.dailyNew)<0) p.dailyNew=10;
   if(typeof p.typing!=='boolean') p.typing=true;
   if(typeof p.autoSpeak!=='boolean') p.autoSpeak=true;
+  if(RETENTION_OPTS.indexOf(p.retention)<0) p.retention=0.9;
   return p;
 }
 function setPref(k,v){ const p=prefs(); p[k]=v; p.at=Date.now(); save(); }
@@ -1871,11 +1900,11 @@ function distractors(w, n){
   return out;
 }
 function finalType(w){ return prefs().typing ? 'type' : (clozeOf(w) ? 'pick' : 'rmc'); }
-/* 複習題型依熟練度：盒 0-1 選意思；盒 2 例句選字；盒 3 以上打字（關閉打字題時改例句選字） */
+/* 複習題型依目前排到的間隔：不到 2 天（剛學或剛忘）選意思；2~6 天例句選字；7 天以上打字（關閉打字題時改例句選字） */
 function revType(w){
-  const b=(store.vsrs[w.id]||{}).box||0;
-  if(b<=1) return 'mc';
-  if(b===2) return clozeOf(w) ? 'pick' : 'rmc';
+  const iv=vCurIv(store.vsrs[w.id]);
+  if(iv<2) return 'mc';
+  if(iv<7) return clozeOf(w) ? 'pick' : 'rmc';
   return finalType(w);
 }
 function sessPrep(st){
@@ -1889,7 +1918,7 @@ function sessPrep(st){
 function sessStart(kind){
   const p=sessPlan(); let q=[];
   if(kind==='quiz'){
-    const pool=allV().filter(w=>{ const s=store.vsrs[w.id]; return s && s.seen>0; });
+    const pool=allV().filter(w=>{ const s=store.vsrs[w.id]; return s && s.seen>0 && s.last!==today(); });   // 今天作答過的不再抽
     const picked=weightedShuffle(pool, w=>{ const s=store.vsrs[w.id]; return 1+Math.min(4,s.lapses||0)+(s.box||0)*0.5; }).slice(0,QUIZ_N);
     q=picked.map((w,i)=>({id:w.id, role:'quiz', type:(i%2===0 ? finalType(w) : (clozeOf(w)?'pick':'rmc'))}));
   }else{
@@ -1910,8 +1939,11 @@ function sessInsert(step, gap){
   const S=ui.sess;
   S.queue.splice(Math.min(S.queue.length, S.i+1+gap), 0, step);
 }
-/* 計分與排程。新內容：第一次作答才算「今天學了一個新字」（中途離開也會留在今日到期），兩關都過→明天複習。
-   複習：只有第一次作答影響排程；答對升一盒（間隔 V_IV），答錯降盒、明天再考，並在本輪稍後重考到答對。 */
+/* 計分與排程（FSRS，見 vApply）。
+   新內容：第一次作答才算「今天學了一個新字」；每一關的對錯都記入記憶狀態，但兩關都過之前到期日留在今天
+   （中途離開的話，今天還會再出現）。
+   複習：只有第一次作答影響排程；答錯會在本輪稍後重考到答對（重考不再改排程）。
+   小考：抽到的卡等同提早複習，對錯都更新排程。 */
 function sessGrade(st, ok){
   const S=ui.sess, s=vsrs(st.id);
   S.n++; if(ok) S.c++;
@@ -1919,19 +1951,16 @@ function sessGrade(st, ok){
   store.meta.answersSinceBackup=(store.meta.answersSinceBackup||0)+1;
   if(!ok && S.wrong.indexOf(st.id)<0) S.wrong.push(st.id);
   if(st.role==='new'){
-    if(!s.seen){ s.seen=1; s.box=0; s.due=today(); vNewMeta().count++; S.newIds.push(st.id); }
-    if(!ok){ sessInsert({id:st.id, role:'new', type:st.type, last:st.last, retry:true}, 2); S.total++; }
-    else if(!st.last){ const w=vById(st.id); sessInsert({id:st.id, role:'new', type:w?finalType(w):'mc', last:true}, 4); }
-    else { s.box=1; s.due=today()+1; }
+    if(!s.seen){ vNewMeta().count++; S.newIds.push(st.id); }
+    vApply(s, ok?3:1);          // 先排程再累計 seen：vApply 以 seen 判斷是不是全新的卡
+    s.seen=(s.seen||0)+1;
+    if(!ok){ sessInsert({id:st.id, role:'new', type:st.type, last:st.last, retry:true}, 2); S.total++; s.due=today(); }
+    else if(!st.last){ const w=vById(st.id); sessInsert({id:st.id, role:'new', type:w?finalType(w):'mc', last:true}, 4); s.due=today(); }
   }else if(st.role==='rev'){
-    if(!st.retry){
-      s.seen++; vDay().rev++; S.revN++;
-      if(ok){ s.box=Math.min(V_BOX_MAX,(s.box||0)+1); s.due=today()+V_IV[s.box]; }
-      else { s.box=(s.box||0)>=2 ? 1 : 0; s.due=today()+1; s.lapses=(s.lapses||0)+1; }
-    }
+    if(!st.retry){ vApply(s, ok?3:1); s.seen++; vDay().rev++; S.revN++; }
     if(!ok){ sessInsert({id:st.id, role:'rev', type:st.type, retry:true}, 2); S.total++; }
   }else if(st.role==='quiz'){
-    if(!ok){ s.box=(s.box||0)>=2 ? 1 : 0; s.due=Math.min(s.due, today()+1); s.lapses=(s.lapses||0)+1; }
+    vApply(s, ok?3:1); s.seen++; vDay().rev++;
   }
   save();
 }
@@ -2094,7 +2123,10 @@ function prefBoxHtml(full){
     <div class="pref-k">每日新內容</div>
     <div class="chiprow wrap">${DAILY_NEW_OPTS.map(n=>'<button class="fchip '+(pf.dailyNew===n?'on':'')+'" data-act="prefNew" data-n="'+n+'">'+n+' 個</button>').join('')}</div>
     <p class="pref-note">每個新內容之後大約會帶來 7～10 次複習；想長期維持，5～10 個最穩。</p>
-    ${full ? `<div class="pref-k">熟悉的字出打字題（主動拼出來，記得最牢）</div>
+    ${full ? `<div class="pref-k">複習強度（到期時預計還記得的比例）</div>
+    <div class="chiprow wrap">${[[0.85,'輕鬆 85%'],[0.9,'標準 90%'],[0.95,'紮實 95%']].map(([v,l])=>'<button class="fchip '+(pf.retention===v?'on':'')+'" data-act="prefRet" data-v="'+v+'">'+l+'</button>').join('')}</div>
+    <p class="pref-note">越高記得越牢，但每天要複習的張數也越多；改了之後從下一次作答開始生效。</p>
+    <div class="pref-k">熟悉的字出打字題（主動拼出來，記得最牢）</div>
     <div class="chiprow wrap"><button class="fchip ${pf.typing?'on':''}" data-act="prefToggle" data-k="typing" data-v="1">開</button><button class="fchip ${pf.typing?'':'on'}" data-act="prefToggle" data-k="typing" data-v="0">關（改用選擇題）</button></div>
     <div class="pref-k">作答後自動唸出來</div>
     <div class="chiprow wrap"><button class="fchip ${pf.autoSpeak?'on':''}" data-act="prefToggle" data-k="autoSpeak" data-v="1">開</button><button class="fchip ${pf.autoSpeak?'':'on'}" data-act="prefToggle" data-k="autoSpeak" data-v="0">關</button></div>` : ''}
@@ -2658,7 +2690,7 @@ function vBrowseList(){
    - 每天新字有配額（prefs().dailyNew，跨批次、跨裝置合併累計；「今日學習」與翻卡複習共用）；
    - 每批至少保留 VOCAB_NEW_SHARE 的位置給新字，不會被到期複習完全擠掉；
    - 到期複習卡逾期越久越優先，新字平均穿插在複習卡之間；
-   - 間隔 V_IV：答對升一盒（1→3→7→14→30→60→120 天），熟的字不會每兩週就回來一次。 */
+   - 間隔由 FSRS 依每張卡的記憶狀態計算（見 vApply），熟的字不會每兩週就回來一次。 */
 const VOCAB_NEW_SHARE = 0.3;
 const VOCAB_EXTRA_NEW = 10;               // 今日配額用完後，「再學新字」一次加練的數量
 const STAR_WEIGHT = {5:8, 4:4, 3:2, 2:1}; // 新字抽樣權重（相對機率）
@@ -2748,7 +2780,7 @@ function rVocab(){
       <div class="pref-k">星等（常用程度）</div>
       <div class="chiprow wrap">${[[0,'全部'],[5,'★5'],[4,'★4 以上'],[3,'★3 以上']].map(([n,l])=>'<button class="fchip sm '+((V.minStars||0)===n?'on':'')+'" data-act="vStars" data-n="'+n+'">'+l+'</button>').join('')}</div>
       ${quizMode ? '' : '<div class="pref-k">拼字練習（卡片／翻卡時）</div><div class="chiprow wrap">'+[['off','關'],['after','看卡後拼'],['zh','看中文拼']].map(([m,l])=>'<button class="fchip sm '+(V.spellMode===m?'on':'')+'" data-act="vSpellMode" data-m="'+m+'">'+l+'</button>').join('')+'</div>'}
-      ${V.mode==='due' ? `<p class="pref-note">翻卡複習是自評模式：<b>不熟</b>＝今天稍後再出現；<b>有點忘</b>＝明天再看；<b>記得</b>＝間隔拉長（1→3→7→14→30→60→120 天）。拼錯過的卡選「記得」也只排到明天。想被考、不靠自評，請用「今日」的今日學習。</p>` : ''}
+      ${V.mode==='due' ? `<p class="pref-note">翻卡複習是自評模式：<b>不熟</b>＝今天稍後再出現；<b>有點忘</b>＝明天再看；<b>記得</b>＝依記憶模型把間隔拉長（越熟隔越久）。拼錯過的卡選「記得」也只排到明天。想被考、不靠自評，請用「今日」的今日學習。</p>` : ''}
     </div>` : '';
   const head = modeRow+bar+panel;
   if(V.mode==='guess') return head+rGuess();
@@ -2801,7 +2833,7 @@ function rVocab(){
   return head+`
     <div class="v-top" style="margin-bottom:8px">
       <span class="faint" style="font-variant-numeric:tabular-nums">第 ${V.done+1} 張 · 剩 ${V.queue.length-V.idx} 張${s.seen?'':' · <b style="color:var(--pine-mid)">新字</b>'}</span>
-      <span class="boxdots" title="熟練度（第 ${s.box} 級／共 ${V_BOX_MAX} 級）">${[0,1,2,3,4].map(i=>'<i class="'+(i<=Math.min(4,s.box)&&s.seen?'f':'')+'"></i>').join('')}</span>
+      <span class="boxdots" title="熟練度（目前間隔 ${vCurIv(s)} 天）">${[0,1,2,3,4].map(i=>'<i class="'+(i<=Math.min(4,s.box)&&s.seen?'f':'')+'"></i>').join('')}</span>
     </div>
     ${fcHtml(w,false)}
     ${spBox}
@@ -2809,7 +2841,7 @@ function rVocab(){
       ? `<div class="grade vbottomrow">
           <button class="g0" data-act="vGrade" data-g="0">不熟<small>今天再出現</small></button>
           <button class="g1" data-act="vGrade" data-g="1">有點忘<small>明天再看</small></button>
-          <button class="g2" data-act="vGrade" data-g="2">記得<small>${spWrong?'拼錯過→明天再看':'隔 '+V_IV[Math.min(V_BOX_MAX,s.box+1)]+' 天'}</small></button>
+          <button class="g2" data-act="vGrade" data-g="2">記得<small>${spWrong?'拼錯過→明天再看':'隔 '+vNextIv(s,3)+' 天'}</small></button>
         </div>`
       : '<div class="vbottomrow" style="text-align:center"><button class="btn primary" data-act="vFlip">翻面看解釋</button></div>'}
   `;
@@ -3352,6 +3384,7 @@ const ACTIONS = {
     setPref('focus', f); render();
   },
   prefNew(d){ setPref('dailyNew', +d.n); render(); },
+  prefRet(d){ setPref('retention', +d.v); render(); },
   prefToggle(d){ setPref(d.k, d.v==='1'); render(); },
   /* 單字庫 */
   vFilter(){ ui.vocab.showFilter=!ui.vocab.showFilter; render(); },
@@ -3517,10 +3550,10 @@ const ACTIONS = {
     if(!s.seen) vNewMeta().count++;                                // 第一次評分＝今天引入一個新字
     else vDay().rev++;                                             // 今日已複習張數（首頁進度用）
     if(g===2 && V.spell && V.spell.id===id && V.spell.wrong) g=1;   // 拼錯過：視為需再複習（最多排到明天）
+    vApply(s, g===0 ? 1 : g===1 ? 2 : 3);                         // 不熟＝Again、有點忘＝Hard、記得＝Good（先排程再累計 seen）
     s.seen++;
-    if(g===0){ s.box=0; s.due=today(); V.queue.push(id); }        // 不熟：今天排隊尾再出現
-    else if(g===1){ s.box=Math.max(1,s.box); s.due=today()+1; }   // 有點忘：明天
-    else { s.box=Math.min(V_BOX_MAX,s.box+1); s.due=today()+V_IV[s.box]; } // 記得：依盒距
+    if(g===0){ s.due=today(); s.box=0; V.queue.push(id); }        // 不熟：今天排隊尾再出現
+    else if(g===1){ s.due=today()+1; s.box=boxOfIv(1); }          // 有點忘：明天再看
     markActive(g===2); store.meta.answersSinceBackup++; save();
     V.idx++; V.done++; V.flip=false; render();
   },
