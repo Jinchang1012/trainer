@@ -482,7 +482,7 @@ body.in-sess #app{padding-bottom:28px}
 .sq-blank{display:inline-block;min-width:3.5em;border-bottom:2.5px solid var(--pine);text-align:center;color:var(--pine);font-weight:700;font-family:var(--sans);font-size:15px;padding:0 6px}
 .sq-ask{font-size:13.5px;color:var(--ink-faint);margin:12px 0 0}
 .sq-mean{display:inline-block;margin-top:10px;font-size:14px;background:var(--brass-tint);border:1px solid var(--brass-line);border-radius:999px;padding:3px 12px}
-.sq-hintw{font-family:var(--serif);font-size:18px;letter-spacing:.14em;color:var(--ink-soft);margin:10px 0 0;word-break:break-all}
+.sq-hintw{font-family:var(--serif);font-size:18px;letter-spacing:.14em;color:var(--ink-soft);margin:10px 0 0;white-space:pre-wrap}
 .sess-in{margin-top:12px}
 .sess-in .spell-in{font-size:20px;padding:12px 14px}
 .sess-in .spell-in:disabled{opacity:.7}
@@ -2031,7 +2031,7 @@ function rSess(){
     q = cz
       ? `<div class="sq-sent">${sent}${a?sessSpk(w.example,'唸例句'):''}</div><div class="sq-sentzh">${esc(w.exampleZh)}</div><div class="sq-mean">${esc(w.meaning)}</div>`
       : `<div class="sq-zh">${esc(w.meaning)}</div><div class="fc-pos" style="text-align:left;margin:2px 0 0">${esc(w.pos)}</div>`;
-    if(!a) q+=`<div class="sq-hintw" aria-label="字母提示">${esc(typeHint(cz?cz.hit:w.word))}</div>`;
+    if(!a) q+=`<div class="sq-hintw" aria-label="字母提示">${typeHint(cz?cz.hit:w.word).split('   ').map(t=>'<span style="display:inline-block;white-space:pre;margin-right:.9em">'+esc(t)+'</span>').join('')}</div>`;
   }
   const head=`<div class="card sq"><div class="sq-head">${tag}${(st.type==='intro'||st.type==='mc') ? sessSpk(w.word,'發音') : ''}</div>${q}</div>`;
   let body='';
