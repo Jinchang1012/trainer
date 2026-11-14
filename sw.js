@@ -1,13 +1,15 @@
 /* 語言訓練場 Service Worker
  * 策略：network-first（有網路永遠拿最新版），失敗時回退 cache（離線可開）。
  */
-const CACHE_NAME = 'langhub-v5';
+const CACHE_NAME = 'langhub-v8';
 const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
+  './icon.svg',
+  './apple-touch-icon.png',
   './modules.js',
   './modules/en/index.html',
   './modules/fr/index.html',
@@ -15,10 +17,15 @@ const PRECACHE_URLS = [
   './modules/shared/sentence-engine.js',
   './modules/shared/sentence-engine.css',
   './modules/shared/family-engine.js',
+  './modules/shared/fsrs.js',
+  './modules/shared/fonts/newsreader-latin-400-normal.woff2',
+  './modules/shared/fonts/newsreader-latin-400-italic.woff2',
+  './modules/shared/fonts/newsreader-latin-600-normal.woff2',
   './modules/en/data/sentences.js',
   './modules/en/data/questions.js',
   './modules/en/data/families.js',
-  './modules/en/data/synsets.js'
+  './modules/en/data/synsets.js',
+  './modules/en/data/phrases.js'
 ];
 
 self.addEventListener('install', (event) => {
