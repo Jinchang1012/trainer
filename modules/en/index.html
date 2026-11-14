@@ -1882,7 +1882,8 @@ function clozeOf(w){
 /* 干擾選項：同一學習重心、詞性相同；片語優先挑「不同類別」的（同類別常是近義說法，放進同一句可能也通） */
 function distractors(w, n){
   const multi=/\s/.test(w.word), g=focusOf(w), pos0=String(w.pos).split('/')[0];
-  const pool=allV().filter(x=>x.id!==w.id && focusOf(x)===g && x.meaning!==w.meaning && !famOverlap(x,w));
+  const near=(Array.isArray(w.near)?w.near:[]).map(normSpell);   // near＝放進同一句也通的近義片語，不能當錯誤選項
+  const pool=allV().filter(x=>x.id!==w.id && focusOf(x)===g && x.meaning!==w.meaning && !famOverlap(x,w) && near.indexOf(normSpell(x.word))<0);
   const tiers=[
     x=>(w.cat ? x.cat!==w.cat : x.theme===w.theme) && /\s/.test(x.word)===multi && String(x.pos).split('/')[0]===pos0,
     x=>(w.cat ? x.cat!==w.cat : true) && String(x.pos).split('/')[0]===pos0,
@@ -1967,7 +1968,7 @@ function sessGrade(st, ok){
 function normAns(s){ return normSpell(s).replace(/[-‐–]/g,' ').replace(/[.,!?;:]+$/,'').replace(/\s+/g,' ').trim(); }
 /* 打字判定：例句中的字形（hit）或原形（word）都算對；6 個字母以上差一個字母視為答對但提示拼字 */
 function typedJudge(val, w, cz){
-  const got=normAns(val), targets=[w.word]; if(cz) targets.unshift(cz.hit);
+  const got=normAns(val), targets=[w.word].concat(Array.isArray(w.alt)?w.alt:[]); if(cz) targets.unshift(cz.hit);   // alt＝資料標註的同義說法，也算對
   const norm=targets.map(normAns);
   if(norm.indexOf(got)>=0) return {ok:true, near:false, target:targets[norm.indexOf(got)]};
   let best=null;
@@ -2055,7 +2056,7 @@ function rSess(){
   }else if(st.type==='rmc'){
     q=`<div class="sq-zh">${esc(w.meaning)}</div><div class="fc-pos" style="text-align:left;margin:2px 0 0">${esc(w.pos)}</div><div class="sq-ask">英文怎麼說？</div>`;
   }else if(st.type==='pick'){
-    q=`<div class="sq-sent">${sent}${a?sessSpk(w.example,'唸例句'):''}</div><div class="sq-sentzh">${esc(w.exampleZh)}</div><div class="sq-ask">空格要放哪一個？</div>`;
+    q=`<div class="sq-sent">${sent}${a?sessSpk(w.example,'唸例句'):''}</div><div class="sq-sentzh">${esc(w.exampleZh)}</div><div class="sq-mean">${esc(w.meaning)}</div><div class="sq-ask">空格要放哪一個？</div>`;
   }else{
     q = cz
       ? `<div class="sq-sent">${sent}${a?sessSpk(w.example,'唸例句'):''}</div><div class="sq-sentzh">${esc(w.exampleZh)}</div><div class="sq-mean">${esc(w.meaning)}</div>`
