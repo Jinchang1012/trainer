@@ -3,28 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#F5F4EE">
+<meta name="theme-color" content="#FFFFFF">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>語言學習</title>
 <style>
 :root{
-  --paper:#F5F4EE; --card:#FFFFFF; --line:#E3E1D4; --line-soft:#EDEBDF;
-  --ink:#1C2B23; --ink-soft:#5C6B60; --ink-faint:#939C92;
-  --pine:#24513B; --pine-deep:#16352A; --pine-tint:#E9F0E9; --pine-mid:#3E7157; --pine-tint-line:#CBDCCB;
-  --brass:#A87B24; --brass-tint:#F7F0DC; --brass-line:#E3D5AC;
-  --clay:#B0492A; --clay-tint:#F8EAE3; --clay-line:#E5C4B4;
-  --radius:14px;
+  /* 與英文模組同一套配色（白紙、藏青墨水）；變數名沿用舊稱：pine＝主要動作、brass＝提示、clay＝錯誤 */
+  --paper:#FFFFFF; --card:#FFFFFF; --line:#DFE2E8; --line-soft:#ECEEF2;
+  --ink:#15181E; --ink-soft:#545B68; --ink-faint:#868C98;
+  --pine:#1D2B53; --pine-deep:#131D3B; --pine-tint:#EAEEF8; --pine-mid:#4A5FA8; --pine-tint-line:#C8D1EA;
+  --brass:#6B5200; --brass-tint:#FFF7CF; --brass-line:#EBD566;
+  --clay:#B42318; --clay-tint:#FCECEA; --clay-line:#F0C1BB;
+  --radius:10px;
   --sans:"Segoe UI","Microsoft JhengHei","PingFang TC","Noto Sans TC",system-ui,sans-serif;
   --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
 }
 @media (prefers-color-scheme: dark){
   :root{
-    --paper:#141B17; --card:#1C2621; --line:#2E3B33; --line-soft:#25302A;
-    --ink:#E8EDE6; --ink-soft:#A5B2A8; --ink-faint:#74827A;
-    --pine:#5FA486; --pine-deep:#7DBE9F; --pine-tint:#1F2E26; --pine-mid:#6DB192; --pine-tint-line:#34493D;
-    --brass:#D2A24A; --brass-tint:#2C2616; --brass-line:#5A4A22;
-    --clay:#E0805F; --clay-tint:#33211A; --clay-line:#5C382B;
+    --paper:#111318; --card:#191C23; --line:#2C313C; --line-soft:#232832;
+    --ink:#E9EBF0; --ink-soft:#A9B0BD; --ink-faint:#757C8A;
+    --pine:#A6B7F7; --pine-deep:#C3CFFA; --pine-tint:#1D2440; --pine-mid:#7388D6; --pine-tint-line:#34406B;
+    --brass:#F0D76A; --brass-tint:#2B2710; --brass-line:#5A4F1C;
+    --clay:#F0806F; --clay-tint:#331A16; --clay-line:#6A2F27;
   }
 }
 *{box-sizing:border-box}
@@ -35,11 +36,11 @@ a{color:inherit;text-decoration:none}
 #app{max-width:720px;margin:0 auto;padding:20px 16px 48px}
 .masthead{margin-bottom:20px}
 .eyebrow{font-size:11.5px;letter-spacing:.16em;color:var(--brass);font-weight:700}
-h1{margin:2px 0 0;font-size:30px;font-weight:800;letter-spacing:.01em}
-h2{margin:26px 0 10px;font-size:13px;letter-spacing:.12em;color:var(--ink-soft);font-weight:700}
+h1{margin:2px 0 0;font-size:26px;font-weight:800}
+h2{margin:26px 0 10px;font-size:13px;color:var(--ink-soft);font-weight:700}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
 .muted{color:var(--ink-soft);font-size:13.5px;margin:0}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 18px;border-radius:12px;font-size:14.5px;font-weight:700}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 18px;border-radius:10px;font-size:14.5px;font-weight:700}
 .btn.primary{background:var(--pine);color:var(--paper)}
 .btn.ghost{border:1.5px solid var(--line);color:var(--ink-soft);background:var(--card)}
 .btn.small{padding:7px 12px;font-size:13px;border-radius:10px}
@@ -53,7 +54,7 @@ h2{margin:26px 0 10px;font-size:13px;letter-spacing:.12em;color:var(--ink-soft);
 .mod{display:flex;align-items:stretch;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .mod-main{flex:1;display:flex;align-items:center;gap:14px;padding:14px 16px;text-align:left;min-width:0}
 .mod-main:hover{background:var(--pine-tint)}
-.flag{flex:none;width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;letter-spacing:.04em;font-family:var(--serif)}
+.flag{flex:none;width:46px;height:46px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;letter-spacing:.04em;font-family:var(--serif)}
 .mod-name{font-size:17px;font-weight:800}
 .mod-sub{font-size:13.5px;color:var(--ink-soft)}
 .mod-stat{font-size:12.5px;color:var(--ink-faint);margin-top:2px}
@@ -69,7 +70,6 @@ details.hidden-box .mods{margin-top:8px}
 <body>
 <div id="app">
   <header class="masthead">
-    <div class="eyebrow">LANGUAGE LEARNING</div>
     <h1>語言學習</h1>
   </header>
   <section aria-labelledby="h-acct">

@@ -1,7 +1,7 @@
 /* 語言訓練場 Service Worker
  * 策略：network-first（有網路永遠拿最新版），失敗時回退 cache（離線可開）。
  */
-const CACHE_NAME = 'langhub-v6';
+const CACHE_NAME = 'langhub-v7';
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -15,6 +15,10 @@ const PRECACHE_URLS = [
   './modules/shared/sentence-engine.js',
   './modules/shared/sentence-engine.css',
   './modules/shared/family-engine.js',
+  './modules/shared/fsrs.js',
+  './modules/shared/fonts/newsreader-latin-400-normal.woff2',
+  './modules/shared/fonts/newsreader-latin-400-italic.woff2',
+  './modules/shared/fonts/newsreader-latin-600-normal.woff2',
   './modules/en/data/sentences.js',
   './modules/en/data/questions.js',
   './modules/en/data/families.js',
