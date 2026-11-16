@@ -581,6 +581,7 @@ body{background:var(--page);-webkit-tap-highlight-color:transparent}
 .speakbtn .ic{width:20px;height:20px}
 .speakbtn:hover{color:var(--link)}
 .starbtn.on{color:#D9A400}
+[role="button"]:focus-visible{outline:2px solid var(--pri-mid);outline-offset:2px;border-radius:6px}
 .opt{border-width:1px;border-radius:10px}
 .face{border-radius:14px}
 .face.back{text-align:left}
@@ -777,14 +778,23 @@ function vMem(st){
 function vNextMem(st, g){ const m=vMem(st); return FSRS6.next(m?{s:m.s,d:m.d}:null, m?Math.max(0, today()-m.last):0, g); }
 /* 若現在以 g 作答，會排到幾天後（不改資料；按鈕上的預告用） */
 function vNextIv(st, g){ return FSRS6.interval(vNextMem(st,g).s, prefs().retention, V_MAX_IV); }
-/* 目前排到的間隔（天）：FSRS 狀態優先，舊紀錄用盒距 */
-function vCurIv(st){ return (st && typeof st.s==='number' && st.s>0) ? FSRS6.interval(st.s, prefs().retention, V_MAX_IV) : V_IV[Math.min(V_BOX_MAX, Math.max(0, (st&&st.box)||0))]; }
-/* 套用一次作答並排下次到期日，回傳間隔天數 */
+/* 目前排到的間隔（天）＝到期日−上次作答日，也就是實際排程（含「答錯隔天再考」「有點忘明天再看」這類覆寫），
+   不從穩定度反推——否則到期日被手動改過的卡，題型與顯示會和實際排程對不上。舊紀錄（沒有 last）用盒距。 */
+function vCurIv(st){
+  if(st && typeof st.due==='number' && typeof st.last==='number') return Math.max(0, st.due-st.last);
+  if(st && typeof st.s==='number' && st.s>0) return FSRS6.interval(st.s, prefs().retention, V_MAX_IV);
+  return V_IV[Math.min(V_BOX_MAX, Math.max(0, (st&&st.box)||0))];
+}
+/* 套用一次作答並排下次到期日，回傳間隔天數。
+   答錯（g=1）：穩定度照 FSRS 降低，但到期日一律是明天——FSRS 對很熟的卡答錯後會算出 2~8 天，
+   這裡改成隔天先確認一次，答對後間隔才依模型拉開。lapses 只計「隔日以上才忘」，同一天內的重試不算。 */
 function vApply(st, g){
-  const had=!!vMem(st), n=vNextMem(st,g), iv=FSRS6.interval(n.s, prefs().retention, V_MAX_IV);
-  st.s=Math.round(n.s*1e4)/1e4; st.d=Math.round(n.d*1e4)/1e4; st.last=today();
-  st.due=today()+iv; st.box=boxOfIv(iv);
-  if(g===1 && had) st.lapses=(st.lapses||0)+1;
+  const m=vMem(st), t=today(), el=m ? Math.max(0, t-m.last) : 0;
+  const n=FSRS6.next(m?{s:m.s,d:m.d}:null, el, g);
+  const iv = g===1 ? 1 : FSRS6.interval(n.s, prefs().retention, V_MAX_IV);
+  st.s=Math.round(n.s*1e4)/1e4; st.d=Math.round(n.d*1e4)/1e4; st.last=t;
+  st.due=t+iv; st.box=boxOfIv(iv);
+  if(g===1 && m && el>0) st.lapses=(st.lapses||0)+1;
   return iv;
 }
 const LS_KEY = 'langhub_en_v1';       // 未登入（訪客）紀錄；也是舊版唯一的 key
@@ -1227,19 +1237,25 @@ const ABC = ['A','B','C','D'];
 
 /* 題幹渲染：標高頻字（虛線底線）＋空格 */
 function sentHtml(q, answered){
-  let html = esc(q.question);
-  const kws = (q.keyWords||[]).slice().sort((x,y)=>y.word.length-x.word.length);
-  if(answered){
-    for(const k of kws){
-      try{
-        const re = new RegExp('\\b('+escReg(k.word)+')\\b','i');
-        if(re.test(html)) html = html.replace(re,'<span class="kw-mark">$1</span>');
-      }catch(e){}
-    }
-  }
+  /* 在「原文」上一次掃完空格佔位與關鍵字，各段文字分別轉義後再包標籤——
+     不在已產生的 HTML 上反覆取代（關鍵字若是 span／class／mark，或是另一個關鍵字的一部分，會插進標籤裡面）。 */
+  const raw=String(q.question==null?'':q.question);
   const fill = answered ? esc(q.options[q.answer]) : '&nbsp;';
-  html = html.replace(/_{3,}/, '<span class="blank">'+fill+'</span>');
-  return html;
+  const kws = answered ? (q.keyWords||[]).map(k=>k && k.word).filter(k=>typeof k==='string' && k.trim()).sort((x,y)=>y.length-x.length) : [];
+  let re;
+  try{ re=new RegExp(['_{3,}'].concat(kws.map(k=>'\\b'+escReg(k)+'\\b')).join('|'), 'gi'); }catch(e){ re=/_{3,}/g; }
+  let out='', last=0, m, blankDone=false;
+  const marked=new Set();
+  while((m=re.exec(raw))){
+    if(!m[0].length){ re.lastIndex++; continue; }
+    const isBlank=/^_{3,}$/.test(m[0]), key=m[0].toLowerCase();
+    if(isBlank ? blankDone : marked.has(key)) continue;        // 空格只換第一個、每個關鍵字只標第一次（與舊版相同）
+    out+=esc(raw.slice(last, m.index));
+    out+= isBlank ? '<span class="blank">'+fill+'</span>' : '<span class="kw-mark">'+esc(m[0])+'</span>';
+    if(isBlank) blankDone=true; else marked.add(key);
+    last=m.index+m[0].length;
+  }
+  return out+esc(raw.slice(last));
 }
 /* 發音用：把題目中的空格佔位換成 "blank" 唸出來 */
 function speakableQuestion(q){
@@ -1468,7 +1484,7 @@ function fmSynPool(){
   return _fmSynPool;
 }
 function fmSpeakBtn(text){
-  return SPEECH_OK ? '<span class="speakbtn" data-act="speakEx" data-text="'+esc(text)+'" role="button" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>' : '';
+  return SPEECH_OK ? '<span class="speakbtn" data-act="speakEx" data-text="'+esc(text)+'" role="button" tabindex="0" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>' : '';
 }
 function fmMark(text, word){
   return FamilyEngine.segments(text, word).map(s=> s.hit ? '<b class="fm-hit">'+esc(s.t)+'</b>' : esc(s.t)).join('');
@@ -1981,31 +1997,46 @@ function inFocus(w){ return prefs().focus.indexOf(focusOf(w))>=0; }
    - 每輪量小（最多 SESS_REV 張複習＋SESS_NEW 個新內容），新字依學習重心平均抽、同一輪避開同類別。 */
 const SESS_REV = 20, SESS_NEW = 5, QUIZ_N = 10;
 function vDay(){ const n=vNewMeta(); if(typeof n.rev!=='number') n.rev=0; return n; }
-/* 今天的學習量：到期複習（所有學過的卡，不分重心）＋學習重心內還沒學過的新內容 */
+/* 內建題庫有約 190 個字同時出現在兩個牌組（多半是多益字彙與字首字根各一張，id 不同、各自排程）。
+   資料不動（刪卡會讓既有紀錄變孤兒），改在排新字時去重：別張同字的卡學過了，這張就不再當新字。 */
+function learnedWordSet(){
+  const set=new Set();
+  for(const w of allV()){ const s=store.vsrs[w.id]; if(s && s.seen>0) set.add(normSpell(w.word)); }
+  return set;
+}
+/* 今天的學習量：到期複習（所有學過的卡，不分重心）＋學習重心內還沒學過的新內容。
+   pending＝今天開始學、但還沒過完最後一關就離開的新卡：它們已算進「今日新字」，又因到期日留在今天而出現在
+   複習清單裡；首頁算進度時要扣掉，否則同一張卡會被算成兩次。 */
 function sessPlan(){
-  const t=today(), rev=[], fresh=[];
+  const t=today(), rev=[], cand=[], known=new Set();
+  let pending=0;
   for(const w of allV()){
     const s=store.vsrs[w.id];
-    if(s && s.seen>0){ if(s.due<=t) rev.push(w); }
-    else if(inFocus(w)) fresh.push(w);
+    if(s && s.seen>0){
+      known.add(normSpell(w.word));
+      if(s.due<=t){ rev.push(w); if(s.intro===t) pending++; }
+    }else if(inFocus(w)) cand.push(w);
   }
-  return {rev, fresh, newLeft: Math.min(vNewLeft(), fresh.length)};
+  const fresh=cand.filter(w=>!known.has(normSpell(w.word)));
+  return {rev, fresh, pending, newLeft: Math.min(vNewLeft(), fresh.length)};
 }
 /* 抽新字：各學習重心輪流出（不讓數量多的牌組淹沒其他牌組），組內依星等加權隨機；
-   有類別（cat）的片語同一批盡量不重複類別，避免相近說法一起學互相干擾。 */
+   有類別（cat）的片語同一批盡量不重複類別，避免相近說法一起學互相干擾；同一個字（不同牌組的兩張卡）一批只出一張。 */
 function pickNew(fresh, n){
   if(n<=0 || !fresh.length) return [];
   const by={};
   fresh.forEach(w=>{ const k=focusOf(w); (by[k]||(by[k]=[])).push(w); });
   const lists=shuffle(Object.keys(by)).map(k=>weightedShuffle(by[k], vStarWeight));
-  const out=[], used=new Set();
+  const out=[], used=new Set(), words=new Set();
   let i=0, guard=0;
-  while(out.length<n && lists.some(l=>l.length) && guard++<10000){
+  while(out.length<n && lists.some(l=>l.length) && guard++<20000){
     const l=lists[i++ % lists.length];
     if(!l.length) continue;
     let j=l.findIndex(w=>!w.cat || !used.has(w.theme+'/'+w.cat));
     if(j<0) j=0;
-    const w=l.splice(j,1)[0];
+    const w=l.splice(j,1)[0], key=normSpell(w.word);
+    if(words.has(key)) continue;
+    words.add(key);
     if(w.cat) used.add(w.theme+'/'+w.cat);
     out.push(w);
   }
@@ -2040,8 +2071,14 @@ function distractors(w, n){
   }
   return out;
 }
-function finalType(w){ return prefs().typing ? 'type' : (clozeOf(w) ? 'pick' : 'rmc'); }
-/* 複習題型依目前排到的間隔：不到 2 天（剛學或剛忘）選意思；2~6 天例句選字；7 天以上打字（關閉打字題時改例句選字） */
+/* 最後一關／熟卡的題型：有例句挖空就打字（或關閉打字時選字）。挖不出空的片語、句型（如 allow A to do B）
+   不出打字題——沒有句子可填，還得連 A、B 一起打——改成看中文選說法；挖不出空的單字仍可看中文打字。 */
+function finalType(w){
+  const cz=clozeOf(w);
+  if(!cz && /\s/.test(String(w.word).trim())) return 'rmc';
+  return prefs().typing ? 'type' : (cz ? 'pick' : 'rmc');
+}
+/* 複習題型依目前排到的間隔（vCurIv）：不到 2 天（剛學或剛忘）選意思；2~6 天例句選字；7 天以上打字（關閉打字題時改例句選字） */
 function revType(w){
   const iv=vCurIv(store.vsrs[w.id]);
   if(iv<2) return 'mc';
@@ -2081,31 +2118,40 @@ function sessInsert(step, gap){
   S.queue.splice(Math.min(S.queue.length, S.i+1+gap), 0, step);
 }
 /* 計分與排程（FSRS，見 vApply）。
-   新內容：第一次作答才算「今天學了一個新字」；每一關的對錯都記入記憶狀態，但兩關都過之前到期日留在今天
-   （中途離開的話，今天還會再出現）。
-   複習：只有第一次作答影響排程；答錯會在本輪稍後重考到答對（重考不再改排程）。
+   新內容：第一次作答才算「今天學了一個新字」，並建立記憶狀態（答對＝Good、答錯＝Again）。
+   學習當天只評這一次分：之後各關若有答錯，就把狀態降成「第一次就答錯」的初始值（不會比那更差）；
+   答對或重考都不再改——否則同一輪連錯會被當成一再遺忘，難度暴衝、之後很久都拉不回來。
+   兩關都過之前到期日留在今天並標記 intro（中途離開的話今天還會再出現，首頁進度也不會重複計算）。
+   複習：只有第一次作答影響排程；答錯會在本輪稍後重考到答對。
    小考：抽到的卡等同提早複習，對錯都更新排程。 */
 function sessGrade(st, ok){
-  const S=ui.sess, s=vsrs(st.id);
+  const S=ui.sess, s=vsrs(st.id), t=today();
   S.n++; if(ok) S.c++;
   markActive(ok);
   store.meta.answersSinceBackup=(store.meta.answersSinceBackup||0)+1;
   if(!ok && S.wrong.indexOf(st.id)<0) S.wrong.push(st.id);
   if(st.role==='new'){
     if(!s.seen){ vNewMeta().count++; S.newIds.push(st.id); }
-    vApply(s, ok?3:1);          // 先排程再累計 seen：vApply 以 seen 判斷是不是全新的卡
+    if(!s.seen) vApply(s, ok?3:1);            // 先排程再累計 seen：vApply 以 seen 判斷是不是全新的卡
+    else if(!ok){ const z=FSRS6.next(null, 0, 1); s.s=Math.min(s.s, Math.round(z.s*1e4)/1e4); s.d=Math.max(s.d, Math.round(z.d*1e4)/1e4); s.last=t; }
     s.seen=(s.seen||0)+1;
-    if(!ok){ sessInsert({id:st.id, role:'new', type:st.type, last:st.last, retry:true}, 2); S.total++; s.due=today(); }
-    else if(!st.last){ const w=vById(st.id); sessInsert({id:st.id, role:'new', type:w?finalType(w):'mc', last:true}, 4); s.due=today(); }
+    if(!ok){ sessInsert({id:st.id, role:'new', type:st.type, last:st.last, retry:true}, 2); S.total++; s.due=t; s.intro=t; }
+    else if(!st.last){ const w=vById(st.id); sessInsert({id:st.id, role:'new', type:w?finalType(w):'mc', last:true}, 4); s.due=t; s.intro=t; }
+    else { const iv=FSRS6.interval(s.s, prefs().retention, V_MAX_IV); s.due=t+iv; s.box=boxOfIv(iv); delete s.intro; }
   }else if(st.role==='rev'){
-    if(!st.retry){ vApply(s, ok?3:1); s.seen++; vDay().rev++; S.revN++; }
+    if(!st.retry){
+      const resumed = s.intro===t;            // 今天學到一半的新卡：已算過今日新字，不再算一次複習
+      vApply(s, ok?3:1); s.seen++; delete s.intro;
+      if(!resumed) vDay().rev++;
+      S.revN++;
+    }
     if(!ok){ sessInsert({id:st.id, role:'rev', type:st.type, retry:true}, 2); S.total++; }
   }else if(st.role==='quiz'){
-    vApply(s, ok?3:1); s.seen++; vDay().rev++;
+    vApply(s, ok?3:1); s.seen++; vDay().rev++; delete s.intro;
   }
   save();
 }
-function normAns(s){ return normSpell(s).replace(/[-‐–]/g,' ').replace(/[.,!?;:]+$/,'').replace(/\s+/g,' ').trim(); }
+function normAns(s){ return normSpell(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[-‐–]/g,' ').replace(/[.,!?;:]+$/,'').replace(/\s+/g,' ').trim(); }
 /* 打字判定：例句中的字形（hit）或原形（word）都算對；6 個字母以上差一個字母視為答對但提示拼字 */
 function typedJudge(val, w, cz){
   const got=normAns(val), targets=[w.word].concat(Array.isArray(w.alt)?w.alt:[]); if(cz) targets.unshift(cz.hit);   // alt＝資料標註的同義說法，也算對
@@ -2149,7 +2195,7 @@ function sessFocus(){
 }
 function typeHint(s){ return String(s).split(' ').map(t=>t.split('').map((c,i)=> i===0 ? c : /[A-Za-z]/.test(c) ? '_' : c).join(' ')).join('   '); }
 function sessSpk(text, label){
-  return SPEECH_OK ? '<span class="speakbtn" data-act="speakWord" data-text="'+esc(text)+'" role="button" aria-label="'+label+'" title="'+label+'"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>' : '';
+  return SPEECH_OK ? '<span class="speakbtn" data-act="speakWord" data-text="'+esc(text)+'" role="button" tabindex="0" aria-label="'+label+'" title="'+label+'"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>' : '';
 }
 function sessFbHtml(st, w, a){
   const intro=st.type==='intro';
@@ -2207,7 +2253,7 @@ function rSess(){
   let body='';
   if(st.type==='type'){
     body=`<div class="sess-in"><div class="spell-row">
-        <input id="sessIn" class="spell-in" type="text" inputmode="latin" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" placeholder="打出空格裡的英文" aria-label="作答輸入" value="${esc(S.typed)}" ${a?'disabled':''}>
+        <input id="sessIn" class="spell-in" type="text" inputmode="latin" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" placeholder="${cz?'打出空格裡的英文':'打出這個意思的英文'}" aria-label="作答輸入" value="${esc(S.typed)}" ${a?'disabled':''}>
         ${a ? '' : '<button class="btn primary small spell-go" data-act="sessCheck">檢查</button>'}
       </div>
       ${a ? '' : '<button class="linkbtn sess-give" data-act="sessGiveUp">想不起來，看答案</button>'}</div>`;
@@ -2279,7 +2325,7 @@ function rHome(){
   const acc=pct(C,A);
   const vAll=allV(), pf=prefs();
   const p=sessPlan(), day=vDay();
-  const revN=p.rev.length, newN=p.newLeft, doneN=day.count+day.rev, leftN=revN+newN, totalN=doneN+leftN;
+  const revN=p.rev.length, newN=p.newLeft, doneN=Math.max(0, day.count+day.rev-p.pending), leftN=revN+newN, totalN=doneN+leftN;   // pending：學到一半的新卡還沒算完成
   const learnedW=vAll.filter(w=>vReviewed(w.id));
   const learned=learnedW.length;
   const mastered=learnedW.filter(w=>store.vsrs[w.id].box>=3).length;
@@ -2714,7 +2760,7 @@ function rGuess(){
   const ans=G.pick!==null, okI=G.opts.indexOf(w.meaning);
   return `<div class="v-top" style="margin-bottom:8px"><span class="faint">看拆解，選出單字意思</span><span class="faint" style="font-variant-numeric:tabular-nums">本輪 ${G.c} / ${G.n}</span></div>
   <div class="card vq">
-    <div class="vq-head"><span class="tag ${wStars(w)>=5?'brass':''}">${starsTxt(wStars(w))}</span>${SPEECH_OK?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
+    <div class="vq-head"><span class="tag ${wStars(w)>=5?'brass':''}">${starsTxt(wStars(w))}</span>${SPEECH_OK?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" tabindex="0" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
     <div class="vq-word">${esc(w.word)}</div>
     <div class="fc-pos" style="margin-bottom:10px">${esc(w.pos)}</div>
     ${morphChipsHtml(w)}
@@ -2725,7 +2771,7 @@ function rGuess(){
   }).join('')}</div>
   ${ans ? `<div class="card vq-ans" style="margin-top:12px">
       <div class="fc-meaning" style="margin-top:0">${G.pick===okI?'✓ 答對':'✗ 正解'}：${esc(w.meaning)}</div>
-      <div class="fc-ex">${exBoldHtml(w)}${SPEECH_OK?'<span class="speakbtn" data-act="speakEx" data-text="'+esc(w.example)+'" role="button" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
+      <div class="fc-ex">${exBoldHtml(w)}${SPEECH_OK?'<span class="speakbtn" data-act="speakEx" data-text="'+esc(w.example)+'" role="button" tabindex="0" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
       <div class="fc-exzh">${esc(w.exampleZh)}</div>
       ${w.tip?'<div class="fc-tip">'+esc(w.tip)+'</div>':''}
     </div>
@@ -2744,17 +2790,40 @@ function vFamilies(){
   _vFam=Object.values(by).filter(f=>f.words.length>=2);
   return _vFam;
 }
-/* 例句挖空：整字（含 -s/-ed/-ing 等變化）→ ____ */
+/* 例句挖空：在例句裡找出這個字／片語實際出現的樣子 → ____。處理：
+   - 頭尾兩個字的字尾變化（resulted in、bids for、policies）、所有格（brand's awareness）；
+   - be 動詞（be responsible for → is responsible for）；
+   - 句型結尾的佔位詞 do／doing（neglect to do → neglected to）；
+   - 連字號寫法（on the job → on-the-job）、重音符號（résumé）。
+   規則推不出來的不規則變化列在 CLOZE_FIX。含 A、B 佔位的句型（allow A to do B）挖不出連續的空，回傳 null。 */
+const CLOZE_FIX = {'fin-145':'spent','office-264':'gave in','root-595':'strung','root-606':'swore','root-1055':'shrank','root-1135':'undertook','fin-182':'charges'};
 function blankEx(w){
-  const word=normSpell(w.word); if(!word) return null;
-  const toks=word.split(' ').map(escReg);
-  const last=toks.pop();
-  const stems=[last]; if(/e$/.test(last)) stems.push(last.slice(0,-1)); if(/y$/.test(last)) stems.push(last.slice(0,-1)+'(?:y|i)');
-  for(const st of stems){
+  const ex=String(w.example||'');
+  const fix=CLOZE_FIX[w.id];
+  if(fix){ const i=ex.indexOf(fix); if(i>=0) return {before:ex.slice(0,i), hit:fix, after:ex.slice(i+fix.length)}; }
+  let toks=normSpell(w.word).split(' ').filter(Boolean);
+  if(!toks.length || String(w.word).trim().split(/\s+/).some(t=>/^[AB](?:'s)?$/.test(t))) return null;   // 大寫 A／B 是句型的佔位詞（小寫 a 是冠詞，照常比對）
+  while(toks.length>1 && /^(do|doing)$/.test(toks[toks.length-1])) toks.pop();
+  const L='A-Za-zÀ-ɏ';
+  /* 先試「原字＋字尾」，找不到才放寬成去 e／y→i 的字幹（fire→firing、policy→policies）。
+     分兩輪是因為放寬後的字幹會先撞到句子前面別的字（fire 的字幹 fir 會撞到 firm）。 */
+  const vary=(t,loose)=>{
+    const alts=[escReg(t)];
+    if(loose && /e$/.test(t)) alts.push(escReg(t.slice(0,-1)));
+    if(loose && /y$/.test(t)) alts.push(escReg(t.slice(0,-1))+'i');
+    return '(?:'+alts.join('|')+')['+L+']*';
+  };
+  for(const loose of [false,true]){
+    const parts=toks.map((t,i)=>{
+      const lastTok = i===toks.length-1;
+      if(i===0 && t==='be' && toks.length>1) return '(?:am|is|are|was|were|be|been|being)';
+      const core=(i===0 || lastTok) ? vary(t,loose) : escReg(t);
+      return core+(lastTok ? '' : "(?:['’]s)?");       // 所有格只允許在片語中間（brand's awareness）
+    });
     try{
-      const re=new RegExp('\\b('+toks.map(t=>t+'\\s+').join('')+st+'[a-z]*)\\b','i');
-      const m=re.exec(w.example);
-      if(m) return {before:w.example.slice(0,m.index), hit:m[1], after:w.example.slice(m.index+m[1].length)};
+      const re=new RegExp('(?<!['+L+'])('+parts.join('[\\s-]+')+')(?!['+L+'])','i');
+      const m=re.exec(ex);
+      if(m) return {before:ex.slice(0,m.index), hit:m[1], after:ex.slice(m.index+m[1].length)};
     }catch(e){}
   }
   return null;
@@ -2808,11 +2877,13 @@ ui.vocab.spellMode = loadSpellMode();
 /* ── 單字庫／翻卡複習 ── */
 /* 翻卡複習的範圍：到期的複習卡＋還沒學過的新字（「全部主題」時新字只取學習重心內的牌組） */
 function vDueList(){
+  const known=learnedWordSet();
   return allV().filter(w=>{
     if(ui.vocab.theme!=='all' && w.theme!==ui.vocab.theme) return false;
     if(!starOk(w)) return false;
     const s=store.vsrs[w.id];
     if(s && s.seen>0) return s.due<=today();
+    if(known.has(normSpell(w.word))) return false;                 // 另一個牌組的同一個字已經學過
     return ui.vocab.theme!=='all' || inFocus(w);
   });
 }
@@ -2872,18 +2943,18 @@ function buildVQueue(extraNew){
   const newPick = pickNew(p.fresh, Math.min(newCap, cap-revPick.length));
   const keyed = revPick.map((w,i)=>[w,(i+0.5)/revPick.length]).concat(newPick.map((w,i)=>[w,(i+0.5)/newPick.length]));
   V.queue = keyed.sort((a,b)=>a[1]-b[1]).map(x=>x[0].id);
-  V.idx=0; V.flip=false; V.done=0;
+  V.idx=0; V.flip=false; V.done=0; V.graded=new Set();
 }
 function vStatusOf(w){ const s=store.vsrs[w.id]; return (s && s.seen>0) ? (s.box>=3 ? 2 : 1) : 0; }
 function vThemeName(k){ if(k==='all') return '全部主題'; const t=THEMES.find(t=>t.key===k); return t?t.name:k; }
 function vItemHtml(w){
   const st=vStatusOf(w), s=store.vsrs[w.id], star=s&&s.star;
   return `<div class="vl-item">
-    <div class="vl-h"><span class="vl-w">${esc(w.word)}</span><span class="fc-pos" style="font-size:12.5px;margin:0">${esc(w.pos)}</span>${SPEECH_OK?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}
+    <div class="vl-h"><span class="vl-w">${esc(w.word)}</span><span class="fc-pos" style="font-size:12.5px;margin:0">${esc(w.pos)}</span>${SPEECH_OK?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" tabindex="0" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}
       ${st ? '<span class="vl-st s'+st+'">'+(st===2?'熟練':'學習中')+'</span>' : '<span style="margin-left:auto"></span>'}
-      <span class="starbtn ${star?'on':''}" data-act="vStar" data-id="${esc(w.id)}" role="button" aria-label="收藏">${star?'★':'☆'}</span></div>
+      <span class="starbtn ${star?'on':''}" data-act="vStar" data-id="${esc(w.id)}" role="button" tabindex="0" aria-label="收藏">${star?'★':'☆'}</span></div>
     <div class="vl-m">${esc(w.meaning)}</div>
-    <div class="vl-ex">${exBoldHtml(w)}${SPEECH_OK?'<span class="speakbtn" data-act="speakEx" data-text="'+esc(w.example)+'" role="button" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
+    <div class="vl-ex">${exBoldHtml(w)}${SPEECH_OK?'<span class="speakbtn" data-act="speakEx" data-text="'+esc(w.example)+'" role="button" tabindex="0" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
     <div class="vl-zh">${esc(w.exampleZh)}</div>
     ${w.cat && w.tip ? '<div class="vl-tip">'+esc(w.tip)+'</div>' : ''}
   </div>`;
@@ -2982,7 +3053,7 @@ function rVocab(){
       ? `<div class="grade vbottomrow">
           <button class="g0" data-act="vGrade" data-g="0">不熟<small>今天再出現</small></button>
           <button class="g1" data-act="vGrade" data-g="1">有點忘<small>明天再看</small></button>
-          <button class="g2" data-act="vGrade" data-g="2">記得<small>${spWrong?'拼錯過→明天再看':'隔 '+vNextIv(s,3)+' 天'}</small></button>
+          <button class="g2" data-act="vGrade" data-g="2">記得<small>${spWrong?'拼錯過→明天再看':(V.graded && V.graded.has(w.id))?'明天再看':'隔 '+vNextIv(s,3)+' 天'}</small></button>
         </div>`
       : '<div class="vbottomrow" style="text-align:center"><button class="btn primary" data-act="vFlip">翻面看解釋</button></div>'}
   `;
@@ -3005,17 +3076,17 @@ function fcHtml(w, browse){
   return `<div class="fc ${flip?'flip':''}">
     <div class="fc-inner">
       <button class="face" data-act="vFlip" aria-label="翻面">
-        <div class="top"><span class="tag" title="常用程度 ${wStars(w)} 星（滿分 5）">${badge}</span>${SPEECH_OK&&!zhQ?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}<span class="starbtn ${star?'on':''}" data-act="vStar" data-id="${esc(w.id)}" role="button" aria-label="收藏">${star?'★':'☆'}</span></div>
+        <div class="top"><span class="tag" title="常用程度 ${wStars(w)} 星（滿分 5）">${badge}</span>${SPEECH_OK&&!zhQ?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" tabindex="0" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}<span class="starbtn ${star?'on':''}" data-act="vStar" data-id="${esc(w.id)}" role="button" tabindex="0" aria-label="收藏">${star?'★':'☆'}</span></div>
         ${front}
       </button>
       <button class="face back" data-act="vFlip" aria-label="翻回">
-        <div class="top"><span class="fc-word-sm">${esc(w.word)} <span class="fc-pos" style="font-size:14px">${esc(w.pos)}</span></span>${SPEECH_OK?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}<span class="starbtn ${star?'on':''}" data-act="vStar" data-id="${esc(w.id)}" role="button" aria-label="收藏">${star?'★':'☆'}</span></div>
+        <div class="top"><span class="fc-word-sm">${esc(w.word)} <span class="fc-pos" style="font-size:14px">${esc(w.pos)}</span></span>${SPEECH_OK?'<span class="speakbtn" data-act="speakWord" data-text="'+esc(w.word)+'" role="button" tabindex="0" aria-label="發音" title="發音"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}<span class="starbtn ${star?'on':''}" data-act="vStar" data-id="${esc(w.id)}" role="button" tabindex="0" aria-label="收藏">${star?'★':'☆'}</span></div>
         <div class="fc-meaning">${esc(w.meaning)}</div>
-        <div class="fc-ex">${exHtml}${SPEECH_OK?'<span class="speakbtn" data-act="speakEx" data-text="'+esc(w.example)+'" role="button" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
+        <div class="fc-ex">${exHtml}${SPEECH_OK?'<span class="speakbtn" data-act="speakEx" data-text="'+esc(w.example)+'" role="button" tabindex="0" aria-label="唸例句" title="唸例句"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':''}</div>
         <div class="fc-exzh">${esc(w.exampleZh)}</div>
         <div class="fc-collo">${(w.collocations||[]).map(c=>'<span>'+esc(c)+'</span>').join('')}</div>
         ${w.tip?'<div class="fc-tip">'+esc(w.tip)+'</div>':''}
-        ${w.casual&&w.casual.en?'<div class="fc-casual"><span class="fc-casual-tag">口語</span> <span class="fc-casual-en">'+esc(w.casual.en)+'</span>'+(SPEECH_OK?'<span class="speakbtn" data-act="speakCasual" data-text="'+esc(w.casual.en)+'" role="button" aria-label="唸口語" title="唸口語"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':'')+(w.casual.zh?'<span class="fc-casual-zh">'+esc(w.casual.zh)+'</span>':'')+(w.casual.note?'<span class="fc-casual-note">'+esc(w.casual.note)+'</span>':'')+'</div>':''}
+        ${w.casual&&w.casual.en?'<div class="fc-casual"><span class="fc-casual-tag">口語</span> <span class="fc-casual-en">'+esc(w.casual.en)+'</span>'+(SPEECH_OK?'<span class="speakbtn" data-act="speakCasual" data-text="'+esc(w.casual.en)+'" role="button" tabindex="0" aria-label="唸口語" title="唸口語"><svg class="ic" aria-hidden="true"><use href="#i-spk"/></svg></span>':'')+(w.casual.zh?'<span class="fc-casual-zh">'+esc(w.casual.zh)+'</span>':'')+(w.casual.note?'<span class="fc-casual-note">'+esc(w.casual.note)+'</span>':'')+'</div>':''}
       </button>
     </div>
   </div>`;
@@ -3667,8 +3738,8 @@ const ACTIONS = {
     sp.res={ok, ops:spellDiff(got,target)};
     if(!ok && !sp.wrong){
       sp.wrong=true;
-      /* 自由瀏覽拼錯：已學過的卡退一盒、排進今天的到期複習（到期複習模式則在評分時處理） */
-      if(V.mode==='browse'){ const s=store.vsrs[w.id]; if(s && s.seen>0){ s.box=Math.max(0,s.box-1); s.due=today(); save(); } }
+      /* 自由瀏覽拼錯：已學過的卡排進今天的到期複習，記憶狀態等複習作答時才更新（不直接改熟練度，避免和排程脫鉤） */
+      if(V.mode==='browse'){ const s=store.vsrs[w.id]; if(s && s.seen>0 && s.due>today()){ s.due=today(); save(); } }
     }
     if(V.spellMode==='zh') V.flip=true;
     render();
@@ -3686,15 +3757,23 @@ const ACTIONS = {
   speakQ(d){ const q=qById(d.id); if(q) speak(speakableQuestion(q)); },
   setAccent(d){ setAccent(d.a); render(); },
   vGrade(d){
-    const V=ui.vocab, id=V.queue[V.idx], s=vsrs(id);
+    const V=ui.vocab, id=V.queue[V.idx], s=vsrs(id), t=today();
     let g=+d.g;
-    if(!s.seen) vNewMeta().count++;                                // 第一次評分＝今天引入一個新字
-    else vDay().rev++;                                             // 今日已複習張數（首頁進度用）
+    if(!V.graded) V.graded=new Set();
+    const again=V.graded.has(id);                                  // 這一批裡評過分了（按「不熟」後排回隊尾的那張）
     if(g===2 && V.spell && V.spell.id===id && V.spell.wrong) g=1;   // 拼錯過：視為需再複習（最多排到明天）
-    vApply(s, g===0 ? 1 : g===1 ? 2 : 3);                         // 不熟＝Again、有點忘＝Hard、記得＝Good（先排程再累計 seen）
-    s.seen++;
-    if(g===0){ s.due=today(); s.box=0; V.queue.push(id); }        // 不熟：今天排隊尾再出現
-    else if(g===1){ s.due=today()+1; s.box=boxOfIv(1); }          // 有點忘：明天再看
+    if(!again){
+      /* 計數與記憶狀態只在這張卡本批第一次評分時更新；排回隊尾後再評不重複計數、不再改記憶狀態 */
+      if(!s.seen) vNewMeta().count++;                              // 第一次評分＝今天引入一個新字
+      else if(s.intro!==t) vDay().rev++;                           // 今日已複習張數（首頁進度用）
+      const prevS=(typeof s.s==='number' && s.s>0) ? s.s : null;
+      vApply(s, g===0 ? 1 : g===1 ? 2 : 3);                        // 不熟＝Again、有點忘＝Hard、記得＝Good（先排程再累計 seen）
+      if(g===1 && prevS!==null && s.s>prevS) s.s=prevS;            // 「有點忘」明天就要再看，不該讓穩定度變高
+      s.seen++; delete s.intro;
+      V.graded.add(id);
+    }
+    if(g===0){ s.due=t; V.queue.push(id); }                        // 不熟：今天排隊尾再出現
+    else if(g===1 || again){ s.due=t+1; s.box=boxOfIv(1); }        // 有點忘、或剛才答過不熟：明天再看
     markActive(g===2); store.meta.answersSinceBackup++; save();
     V.idx++; V.done++; V.flip=false; render();
   },
@@ -3906,7 +3985,7 @@ document.addEventListener('click',e=>{
   if(fn){ e.preventDefault(); fn(el.dataset,el); }
 },true);
 
-/* 鍵盤觸發：<span role="button">（如 masthead 的 cs-chip）不是原生 button，
+/* 鍵盤觸發：<span role="button" tabindex="0">（如 masthead 的 cs-chip）不是原生 button，
    瀏覽器不會把 Enter/Space 轉成 click，這裡補上等效行為（走同一個 ACTIONS 分派） */
 document.addEventListener('keydown',e=>{
   if(e.key!=='Enter' && e.key!==' ' && e.key!=='Spacebar') return;
