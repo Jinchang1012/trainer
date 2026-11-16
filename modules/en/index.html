@@ -2062,8 +2062,11 @@ function clozeOf(w){
 /* 干擾選項：同一學習重心、詞性相同；片語優先挑「不同類別」的（同類別常是近義說法，放進同一句可能也通） */
 function distractors(w, n){
   const multi=/\s/.test(w.word), g=focusOf(w), pos0=String(w.pos).split('/')[0];
-  const near=(Array.isArray(w.near)?w.near:[]).map(normSpell);   // near＝放進同一句也通的近義片語，不能當錯誤選項
-  const pool=allV().filter(x=>x.id!==w.id && focusOf(x)===g && x.meaning!==w.meaning && !famOverlap(x,w) && near.indexOf(normSpell(x.word))<0);
+  /* near＝放進同一句也通的近義字，不能當錯誤選項。雙向檢查：只有其中一張卡標了 near 也算
+     （補充牌組的 job opening 標了 vacancy，出 vacancy 的題目時同樣不能拿 job opening 當選項）。 */
+  const near=(Array.isArray(w.near)?w.near:[]).map(normSpell), me=normSpell(w.word);
+  const isNear=x=>near.indexOf(normSpell(x.word))>=0 || (Array.isArray(x.near) && x.near.some(k=>normSpell(k)===me));
+  const pool=allV().filter(x=>x.id!==w.id && focusOf(x)===g && x.meaning!==w.meaning && !famOverlap(x,w) && !isNear(x));
   const tiers=[
     x=>(w.cat ? x.cat!==w.cat : x.theme===w.theme) && /\s/.test(x.word)===multi && String(x.pos).split('/')[0]===pos0,
     x=>(w.cat ? x.cat!==w.cat : true) && String(x.pos).split('/')[0]===pos0,
