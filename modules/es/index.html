@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#F6F2EC">
 <title>西文訓練場</title>
+<link rel="icon" type="image/svg+xml" href="../../icon.svg">
+<link rel="manifest" href="../../manifest.json">
+<link rel="apple-touch-icon" href="../../apple-touch-icon.png">
 <style>
 :root{
   --paper:#F6F2EC; --card:#FFFFFF; --line:#E6DED2; --line-soft:#EFE9DF;
@@ -16,6 +19,16 @@
   --radius:14px;
   --sans:"Segoe UI","Microsoft JhengHei","PingFang TC","Noto Sans TC",system-ui,sans-serif;
   --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#1A1614; --card:#231D1A; --line:#3A302B; --line-soft:#2D2521;
+    --ink:#EFE7E2; --ink-soft:#B9ABA3; --ink-faint:#85776F;
+    --pine:#B4513F; --pine-deep:#8E3A2C; --pine-tint:#33201B; --pine-mid:#C77363;
+    --brass:#D2A24A; --brass-tint:#33280F; --brass-line:#4E3C1A;
+    --ok:#5CB58A; --ok-tint:#17291F;
+    --clay:#E08A4A; --clay-tint:#33200F; --clay-line:#5A3A1C;
+  }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
@@ -183,7 +196,7 @@ details[open] summary{margin-bottom:10px}
   .eyebrow{font-size:9px}
   .masthead h1{font-size:22px}
   .voicesel{max-width:120px;font-size:12.5px}
-  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;background:#fff;border:none;border-top:1px solid var(--line);border-radius:0;padding:4px 2px calc(4px + env(safe-area-inset-bottom));margin-bottom:0;overflow-x:visible}
+  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;background:var(--card);border:none;border-top:1px solid var(--line);border-radius:0;padding:4px 2px calc(4px + env(safe-area-inset-bottom));margin-bottom:0;overflow-x:visible}
   .tabs button{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 2px;border-radius:10px;font-size:10.5px;font-weight:600;white-space:normal}
   .tabs button.on{background:transparent;color:var(--pine-deep)}
   .tabs button .tab-ic{display:block;font-size:20px;line-height:1}
@@ -195,6 +208,8 @@ details[open] summary{margin-bottom:10px}
   .opt{min-height:48px;padding:13px 14px;font-size:17px}
   .tile{padding:11px 14px;font-size:18px}
 }
+/* 深色模式：手機底部導覽的選取中分頁用較亮的主色字（深色的 pine-deep 在深底上看不清楚） */
+@media (prefers-color-scheme: dark) and (max-width:640px){ .tabs button.on{color:var(--pine-mid)} }
 </style>
 </head>
 <body>
@@ -719,7 +734,7 @@ function bFeedback(q){
   if(it.alt && it.alt.length) h+='<div class="faint" style="font-size:13px;margin-top:8px">其他說法</div><ul class="altlist">'+it.alt.map(function(a){ return '<li>'+esc(a)+'</li>'; }).join('')+'</ul>';
   if(it.chunks && it.chunks.length) h+='<div class="chunks"><div class="h">ESPAÑOL</div><div class="h">中文</div>'+it.chunks.map(function(c){ return '<div class="es">'+esc(c.es)+'</div><div>'+esc(c.zh)+'</div>'; }).join('')+'</div>';
   if(it.grammar && it.grammar.length) h+='<div class="grammar">'+it.grammar.map(function(g){
-    g=String(g); var m=g.match(/^([^:：]{1,12})[:：]s*([sS]*)$/);
+    g=String(g); var m=g.match(/^([^:：]{1,12})[:：]\s*([\s\S]*)$/);
     return m ? '<div><span class="gtag">'+esc(m[1])+'</span>'+esc(m[2])+'</div>' : '<div>'+esc(g)+'</div>';
   }).join('')+'</div>';
   if(it.note) h+='<div class="note">💡 '+esc(it.note)+'</div>';
@@ -1463,6 +1478,10 @@ document.addEventListener('visibilitychange', function(){
 fillVoiceSel();
 render();
 gdInit();
+/* 離線支援：與首頁、英文模組共用根目錄的 Service Worker */
+if('serviceWorker' in navigator && (location.protocol==='http:'||location.protocol==='https:')){
+  try{ navigator.serviceWorker.register('../../sw.js').catch(function(){}); }catch(e){}
+}
 })();
 </script>
 </body>
