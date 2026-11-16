@@ -2,6 +2,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#F5F4EE">
 <title>法文訓練場</title>
+<link rel="icon" type="image/svg+xml" href="../../icon.svg">
+<link rel="manifest" href="../../manifest.json">
+<link rel="apple-touch-icon" href="../../apple-touch-icon.png">
 <style>
 :root{
   --paper:#F5F4EE; --card:#FFFFFF; --line:#E3E1D4; --line-soft:#EDEBDF;
@@ -12,6 +15,15 @@
   --radius:14px;
   --sans:"Segoe UI","Microsoft JhengHei","PingFang TC","Noto Sans TC",system-ui,sans-serif;
   --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#15181B; --card:#1E2422; --line:#2B3330; --line-soft:#242B27;
+    --ink:#E7ECE7; --ink-soft:#A7B4A9; --ink-faint:#75827A;
+    --pine:#3E9268; --pine-deep:#2F7350; --pine-tint:#1C2D25; --pine-mid:#4C9670;
+    --brass:#D2A24A; --brass-tint:#33280F; --brass-line:#4E3C1A;
+    --clay:#E0805F; --clay-tint:#301B14; --clay-line:#4E2E22;
+  }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
@@ -166,7 +178,7 @@ pre.schema{background:var(--paper);border:1px solid var(--line);border-radius:10
 
   .tabs{
     position:fixed;left:0;right:0;bottom:0;z-index:50;
-    display:flex;background:#fff;border:none;border-top:1px solid var(--line);
+    display:flex;background:var(--card);border:none;border-top:1px solid var(--line);
     border-radius:0;padding:4px 2px calc(4px + env(safe-area-inset-bottom));
     margin-bottom:0;overflow-x:visible;
   }
@@ -192,6 +204,8 @@ pre.schema{background:var(--paper);border:1px solid var(--line);border-radius:10
   .fc-word-sm{font-size:19px}
   .q-sent{font-size:18px}
 }
+/* 深色模式：手機底部導覽的選取中分頁用較亮的主色字（深色的 pine-deep 在深底上看不清楚） */
+@media (prefers-color-scheme: dark) and (max-width:640px){ .tabs button.on{color:var(--pine-mid)} }
 </style>
 
 <div id="app">
@@ -847,4 +861,8 @@ if(_voiceSelEl){
 
 _fillVoiceSel();
 render();
+/* 離線支援：與首頁、英文模組共用根目錄的 Service Worker */
+if('serviceWorker' in navigator && (location.protocol==='http:'||location.protocol==='https:')){
+  try{ navigator.serviceWorker.register('../../sw.js').catch(()=>{}); }catch(e){}
+}
 </script>
