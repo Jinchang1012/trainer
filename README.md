@@ -72,6 +72,7 @@ modules/en/data/words.js   補充字彙（多益情境補充、學術字彙 acad
 modules/en/data/*.js       組句、問句、詞族、同義詞資料
 modules/shared/            句子引擎、詞族引擎、fsrs.js（排程）、fonts/（Newsreader 字檔）
 modules/es、modules/fr      西文、法文模組
+tests/                     法文模組檢查：node tests/fr-merge.check.js（合併規則，免安裝）、node tests/fr-sync.e2e.js（帳號隔離與同步流程，需 Playwright；Google 登入與 Drive 為模擬）
 ```
 
 ### 新增片語或單字
@@ -96,6 +97,7 @@ modules/es、modules/fr      西文、法文模組
 ## 學習紀錄與同步
 
 - 紀錄存在每台裝置瀏覽器的 localStorage；用 Google 登入後會透過 Google Drive（appDataFolder）在裝置間自動同步。
+- 英文、法文、西文各有自己的同步檔（`langhub_en_state.json`、`langhub_fr_state.json`、`langhub_es_state.json`），紀錄依登入帳號分開存放；未登入時是這台裝置的訪客紀錄。
 - 未登入時可到「更多 → 設定與資料」下載備份檔，到另一台「合併匯入」（合併是冪等的，來回同步不會亂）。
 - 學習偏好（學習重心、每日新內容等）隨紀錄一起備份與同步。
 
