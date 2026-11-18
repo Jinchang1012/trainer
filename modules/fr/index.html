@@ -35,6 +35,17 @@ button:focus-visible,textarea:focus-visible,details summary:focus-visible{outlin
 .masthead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}
 .eyebrow{font-size:11px;letter-spacing:.22em;color:var(--ink-faint);font-weight:600}
 .masthead h1{margin:2px 0 0;font-size:32px;font-weight:800;letter-spacing:.01em}
+.mast-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+
+/* ── 雲端同步狀態 chip（masthead 常駐；與英文／西文模組相同）── */
+.cs-chip{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;min-height:0;border-radius:999px;border:1px solid var(--line);background:var(--card);font:inherit;font-size:12.5px;font-weight:600;color:var(--ink-soft);white-space:nowrap;cursor:pointer}
+.cs-chip:hover{border-color:var(--pine-mid)}
+.cs-chip-ic{font-size:13px;line-height:1}
+.cs-chip.cs-ok{background:var(--pine-tint);border-color:var(--pine-mid);color:var(--pine-deep)}
+.cs-chip.cs-fail{background:var(--clay-tint);border-color:var(--clay-line);color:var(--clay)}
+.cs-chip.cs-busy{background:var(--brass-tint);border-color:var(--brass-line);color:var(--brass)}
+.cs-chip.cs-offline,.cs-chip.cs-out{color:var(--ink-faint)}
+#toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:88vw;background:var(--pine-deep);color:#fff;padding:10px 16px;border-radius:10px;font-size:13.5px;line-height:1.5;box-shadow:0 4px 16px rgba(0,0,0,.18);z-index:200;opacity:0;transition:opacity .25s;pointer-events:none}
 
 /* ── 分頁 ── */
 .tabs{display:flex;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:5px;margin-bottom:18px;overflow-x:auto}
@@ -215,12 +226,16 @@ pre.schema{background:var(--paper);border:1px solid var(--line);border-radius:10
       <div class="eyebrow">ENTRAÎNEMENT DE FRANÇAIS</div>
       <h1>法文訓練場</h1>
     </div>
-    <div id="accentbox"></div>
-    <select id="voicesel" class="voicesel"></select>
+    <div class="mast-tools">
+      <span id="cs-chip-slot"></span>
+      <div id="accentbox"></div>
+      <select id="voicesel" class="voicesel"></select>
+    </div>
   </header>
   <nav class="tabs" id="tabs" role="tablist"></nav>
   <main id="view"></main>
 </div>
+<div id="toast" role="status"></div>
 
 <script>
 'use strict';
@@ -250,20 +265,200 @@ const THEMES = [
 const SRS_IV = [0,1,3,7,14];          // Leitner 盒 0-4 的複習間隔（天）
 const LS_KEY = 'francais_v1';
 
+/* === ACCT_BEGIN ===
+   帳號隔離（比照英文／西文模組）：學習紀錄依登入 Google 帳號分 key，同一裝置換帳號互不可見。
+   - 未登入：LS_KEY（francais_v1，行為與舊版完全相同）。已登入：LS_ACCT_PREFIX + email 小寫。
+   - 目前使用中的 key 只由 storeOwner 決定；save() 只寫 storeOwner 的 key，雲端同步只在
+     storeOwner === 登入 email 時才 pull/push（見 gdPullAndMerge／gdPush 的 owner 檢查）。
+   - 升級遷移（只做一次）：已登入且該帳號尚無 key → 舊 francais_v1 的資料視為該帳號的，搬過去。
+   - 未登入時的紀錄：登入某帳號時若訪客紀錄有內容，詢問是否併入；併入後清空訪客紀錄；
+     不併入則保留為訪客紀錄，訪客紀錄沒有新變動前不再詢問。
+   - 口音／語音選擇（francais_accent、francais_voice）屬裝置偏好，不分帳號、不同步。 */
+const LS_ACCT_PREFIX = 'francais_v1::';
+const ACCT_HUB_SESSION_KEY = 'langhub_gd_session';   // 與 GD 模組的 HUB_SESSION_KEY 同值（load() 之前就要用到，先宣告）
+const ACCT_MIGRATED_KEY = 'langhub_fr_acct_migrated';
+const ACCT_GUEST_ASKED_KEY = 'langhub_fr_guest_asked'; // {email: 已詢問過時的訪客紀錄指紋}
+function normEmail(e){ return (typeof e==='string' && e.trim()) ? e.trim().toLowerCase() : null; }
+function storeKeyFor(email){ const m=normEmail(email); return m ? LS_ACCT_PREFIX+m : LS_KEY; }
+function acctHubEmail(){
+  try{
+    const h = JSON.parse(localStorage.getItem(ACCT_HUB_SESSION_KEY)||'null');
+    if(h && typeof h==='object' && normEmail(h.email)) return normEmail(h.email);
+  }catch(e){}
+  return null;
+}
+function acctInitOwner(){
+  const email = acctHubEmail();
+  try{
+    if(!localStorage.getItem(ACCT_MIGRATED_KEY)){
+      if(email && localStorage.getItem(storeKeyFor(email))===null){
+        const legacy = localStorage.getItem(LS_KEY);
+        if(legacy!==null){ localStorage.setItem(storeKeyFor(email), legacy); localStorage.removeItem(LS_KEY); }
+      }
+      localStorage.setItem(ACCT_MIGRATED_KEY, '1');
+    }
+  }catch(e){}
+  return email;
+}
+var storeOwner = acctInitOwner();   // null = 未登入（訪客）
+/* 切換使用中的帳號：舊資料留在舊 key，換讀新 key；不做任何合併（訪客併入另由 acctMaybeAdoptGuest 詢問）。 */
+function acctSwitch(email){
+  email = normEmail(email);
+  if(email===storeOwner) return false;
+  // 不把記憶體中的 store 寫回舊 key：save() 每次變動都已存檔，另一分頁可能已寫入較新的紀錄
+  clearTimeout(_gdPushTimer);
+  storeOwner = email;
+  store = load();
+  if(typeof GD!=='undefined' && GD){ GD.fileId=null; GD.pulledOnce=false; GD.cloudHadData=false; }
+  acctResetUi();
+  return true;
+}
+/* 換帳號時清掉畫面上的暫存狀態（複習佇列、作答中的測驗屬於前一個帳號） */
+function acctResetUi(){
+  const V=ui.vocab, Q=ui.quiz;
+  V.queue=[]; V.idx=0; V.flip=false; V.done=0; V.browseIdx=0;
+  Q.stage='setup'; Q.list=[]; Q.idx=0; Q.picked=null; Q.session=[];
+  ui.bank.msg=null; ui.backupShow=false;
+}
+function acctRawStamp(raw){ let h=0; for(let i=0;i<raw.length;i++) h=(h*31+raw.charCodeAt(i))>>>0; return raw.length+':'+h; }
+/* 已登入且訪客紀錄有內容 → 問一次是否併入此帳號。回傳是否有併入。 */
+function acctMaybeAdoptGuest(){
+  const email = storeOwner;
+  if(!email) return false;
+  let guest=null, raw=null;
+  try{ raw = localStorage.getItem(LS_KEY); guest = raw ? JSON.parse(raw) : null; }catch(e){ guest=null; }
+  if(!guest || typeof guest!=='object') return false;
+  normStore(guest);
+  if(!gdStoreIsMeaningful(guest)) return false;
+  let asked={};
+  try{ asked = JSON.parse(localStorage.getItem(ACCT_GUEST_ASKED_KEY)||'{}')||{}; }catch(e){ asked={}; }
+  const stamp = acctRawStamp(raw);
+  if(asked[email]===stamp) return false;
+  const ok = (typeof confirm==='function') && confirm('這台裝置有「未登入時」的練習紀錄。\n要把它併入 Google 帳號 '+email+' 嗎？\n\n確定：併入此帳號，並清空未登入紀錄\n取消：不併入（保留為未登入紀錄，登出後仍看得到）');
+  if(ok){
+    mergeStore(store, guest);
+    try{ localStorage.removeItem(LS_KEY); }catch(e){}
+    delete asked[email];
+    save();
+  }else{
+    asked[email] = stamp;
+  }
+  try{ localStorage.setItem(ACCT_GUEST_ASKED_KEY, JSON.stringify(asked)); }catch(e){}
+  return ok;
+}
+/* === ACCT_END === */
+
 /* ── 儲存層 ── */
-function defaults(){ return {vsrs:{}, custom:{vocab:[],seq:1}, qstats:{}, history:{}}; }
+/* === MERGESTORE_BEGIN ===
+   store 形狀：vsrs{id:{box,due,seen,star,st?}}、qstats{id:{a,c,lw}}、history{日序:true}、
+   custom{vocab:[…],seq,del{內容鍵:刪除時間}}。
+   mergeStore(local, incoming)（雲端 pull、訪客併入共用）就地把 incoming 併進 local：
+   - 冪等：同一份併入第二次不會有任何變動；不會因為來回同步而膨脹。
+   - 不丟進度：vsrs 每張卡取「seen（複習次數）較多」的一方，相同再比 box、due；
+     qstats 每題取「a（作答次數）較多」的一方，相同再比 c，仍相同則保留 lw（留在錯題本）。
+   - 收藏（star）：兩邊都沒有改動時間（st）時取聯集；有 st 時以較晚改動的一方為準，取消收藏才同步得過去。
+   - history：日期聯集。
+   - 自建單字：各裝置的 id（f-c1、f-c2…）各自編號、會撞號，所以用「內容」比對是不是同一個字：
+     內容相同 → 視為同一筆，對方的進度併到本機那筆的 id；內容不同但 id 撞號 → 換一個新 id 收進來
+     （不會蓋掉本機的字，也不會把兩個不同單字的進度混在一起）。
+     刪除會留下刪除標記（custom.del），別台裝置的舊資料不會把已刪的字加回來；刪除後重新匯入（at 較新）則保留。 */
+function defaults(){ return {vsrs:{}, custom:{vocab:[],seq:1,del:{}}, qstats:{}, history:{}}; }
+function isObj(x){ return !!x && typeof x==='object' && !Array.isArray(x); }
+/* 補齊欄位（load、匯入、雲端合併、訪客併入共用） */
+function normStore(s){
+  ['vsrs','qstats','history'].forEach(k=>{ if(!isObj(s[k])) s[k]={}; });
+  if(!isObj(s.custom)) s.custom={};
+  const c=s.custom;
+  c.vocab = Array.isArray(c.vocab) ? c.vocab.filter(w=>isObj(w) && typeof w.id==='string' && w.id) : [];
+  if(!(c.seq>=1)) c.seq=1;
+  if(!isObj(c.del)) c.del={};
+  return s;
+}
+const CUSTOM_ID_RE = /^f-c\d+$/;
+function customKey(w){ return [w.word,w.pos,w.meaning,w.example,w.exampleZh,w.theme,w.freq,w.tip].map(x=>x==null?'':String(x)).join('\u0001'); }
+function customIsDeleted(del, w){ const t=del[customKey(w)]||0; return t>0 && t>=(w.at||0); }
+function vsrsValid(r){ return isObj(r) && typeof r.box==='number' && typeof r.due==='number'; }
+function vsrsIncomingWins(r, l){
+  const rs=r.seen||0, ls=l.seen||0;
+  if(rs!==ls) return rs>ls;
+  if(r.box!==l.box) return r.box>l.box;
+  return r.due>l.due;
+}
+function vsrsMerge(l, r){
+  const m = Object.assign({}, vsrsIncomingWins(r,l) ? r : l);
+  const lt=l.st||0, rt=r.st||0;
+  m.star = lt===rt ? !!(l.star||r.star) : !!(rt>lt ? r.star : l.star);
+  if(lt||rt) m.st=Math.max(lt,rt); else delete m.st;
+  return m;
+}
+function qstatValid(r){ return isObj(r) && typeof r.a==='number' && typeof r.c==='number'; }
+function qstatIncomingWins(r, l){
+  if(r.a!==l.a) return r.a>l.a;
+  if(r.c!==l.c) return r.c>l.c;
+  return !!r.lw && !l.lw;
+}
+function mergeStore(local, incoming){
+  normStore(local);
+  const inc = normStore(isObj(incoming) ? JSON.parse(JSON.stringify(incoming)) : {});
+  const n = {vsrs:0, qstats:0, hist:0, custom:0};
+  const lc=local.custom, ic=inc.custom;
+
+  /* 自建單字：刪除標記取聯集 → 以內容比對出「對方 id → 本機 id」→ 套用刪除標記 */
+  Object.keys(ic.del).forEach(k=>{ const t=+ic.del[k]||0; if(t>(lc.del[k]||0)){ lc.del[k]=t; n.custom++; } });
+  lc.seq = Math.max(lc.seq, ic.seq);
+  const byId={}, byKey={}, incIds={}, idMap={};
+  lc.vocab.forEach(w=>{ byId[w.id]=w; const k=customKey(w); if(!byKey[k]) byKey[k]=w; });
+  const idTaken = id => !!byId[id] || id in local.vsrs || id in local.qstats;   // 本機殘留進度的 id 也不重用
+  ic.vocab.forEach(w=>{
+    if(!w.word) return;
+    incIds[w.id]=true;
+    const k=customKey(w);
+    let t = byId[w.id];
+    if(!t || customKey(t)!==k) t = byKey[k];
+    if(t){ if((w.at||0)>(t.at||0)){ t.at=w.at; n.custom++; } idMap[w.id]=t.id; return; }
+    if(customIsDeleted(lc.del, w)) return;          // 已刪除：字與它的進度都不收
+    const copy = Object.assign({}, w);
+    if(!CUSTOM_ID_RE.test(copy.id) || idTaken(copy.id)){ do{ copy.id='f-c'+(lc.seq++); }while(idTaken(copy.id)); }
+    lc.vocab.push(copy); byId[copy.id]=copy; byKey[k]=copy; idMap[w.id]=copy.id; n.custom++;
+  });
+  const before = lc.vocab.length;
+  lc.vocab = lc.vocab.filter(w=>!customIsDeleted(lc.del, w));
+  n.custom += before-lc.vocab.length;
+  lc.vocab.forEach(w=>{ const num=CUSTOM_ID_RE.test(w.id) ? +w.id.slice(3) : 0; if(num>=lc.seq) lc.seq=num+1; });
+
+  /* 對方的 id 對應到本機 id：自建單字走 idMap；對方已刪／沒有對應單字的自建 id（殘留進度）不收；其餘（內建單字）原 id */
+  const mapId = id => (id in idMap) ? idMap[id] : ((incIds[id] || CUSTOM_ID_RE.test(id)) ? null : id);
+
+  Object.keys(inc.vsrs).forEach(id=>{
+    const r=inc.vsrs[id], tid=mapId(id);
+    if(tid===null || !vsrsValid(r)) return;
+    const l=local.vsrs[tid];
+    const m = vsrsValid(l) ? vsrsMerge(l, r) : Object.assign({}, r);
+    if(JSON.stringify(m)!==JSON.stringify(l)){ local.vsrs[tid]=m; n.vsrs++; }
+  });
+  Object.keys(inc.qstats).forEach(id=>{
+    const r=inc.qstats[id], tid=mapId(id);
+    if(tid===null || !qstatValid(r)) return;
+    const l=local.qstats[tid];
+    if(qstatValid(l) && !qstatIncomingWins(r,l)) return;
+    local.qstats[tid] = Object.assign({}, r); n.qstats++;
+  });
+  Object.keys(inc.history).forEach(d=>{ if(inc.history[d] && !local.history[d]){ local.history[d]=true; n.hist++; } });
+  return n;
+}
+/* === MERGESTORE_END === */
 let store = load();
 function load(){
   try{
-    const s = JSON.parse(localStorage.getItem(LS_KEY));
+    const s = JSON.parse(localStorage.getItem(storeKeyFor(storeOwner)));
     if(!s || typeof s!=='object') return defaults();
-    const d = defaults();
-    for(const k in d) if(!(k in s)) s[k]=d[k];
-    if(!s.custom.seq) s.custom.seq=1;
-    return s;
+    return normStore(s);
   }catch(e){ return defaults(); }
 }
-function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(store)); }catch(e){} }
+function save(){
+  try{ localStorage.setItem(storeKeyFor(storeOwner), JSON.stringify(store)); }catch(e){}
+  if(typeof gdSchedulePush==='function') gdSchedulePush();
+}
 function today(){ return Math.floor(Date.now()/864e5); }
 function streak(){
   let n=0, d=today();
@@ -374,6 +569,13 @@ function speak(text){
   }catch(e){ /* 靜默失敗，不中斷 UI */ }
 }
 
+let _toastTimer = null;
+function showToast(msg){
+  const t=document.getElementById('toast'); if(!t) return;
+  t.textContent=msg; t.style.opacity='1';
+  clearTimeout(_toastTimer); _toastTimer=setTimeout(()=>{ t.style.opacity='0'; },3600);
+}
+
 /* =====================================================================
    狀態與渲染
    ===================================================================== */
@@ -407,6 +609,7 @@ function render(){
       (showCA ? '<button class="fchip '+(ACCENT==='ca'?'on':'')+'" data-act="setAccent" data-a="ca">🇨🇦 加拿大</button>' : '')+
       '</div>';
   } else if(abox){ abox.innerHTML=''; }
+  gdRenderChip();
   const v = document.getElementById('view');
   v.innerHTML = ({home:rHome, vocab:rVocab, quiz:rQuiz, fav:rFav, bank:rBank}[ui.tab])();
   v.scrollTop=0;
@@ -458,9 +661,11 @@ function rHome(){
     }).join('')}
   </div>
 
-  <div class="card">
+  <div class="card" id="data-card">
+    <div id="gd-section-slot">${gdSectionHtml()}</div>
+    <div class="hr"></div>
     <div class="lbl">紀錄備份</div>
-    <p class="muted" style="font-size:13.5px;margin:0 0 10px">學習紀錄存在這個瀏覽器的 localStorage。換裝置或怕遺失時，可匯出 JSON 保存。</p>
+    <p class="muted" style="font-size:13.5px;margin:0 0 10px">學習紀錄存在這個瀏覽器的 localStorage（登入 Google 後依帳號分開存放，並自動同步）。也可以匯出 JSON 另外保存。</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn ghost small" data-act="expProg">匯出紀錄</button>
       <button class="btn ghost small" data-act="impProgShow">匯入紀錄</button>
@@ -758,7 +963,7 @@ const ACTIONS = {
   vPrev(){ const list=vBrowseList(); ui.vocab.browseIdx=(ui.vocab.browseIdx-1+list.length)%list.length; ui.vocab.flip=false; render(); },
   vNext(){ const list=vBrowseList(); ui.vocab.browseIdx=(ui.vocab.browseIdx+1)%list.length; ui.vocab.flip=false; render(); },
   vRebuild(){ buildVQueue(); render(); },
-  vStar(d){ const s=vsrs(d.id); s.star=!s.star; save(); render(); },
+  vStar(d){ const s=vsrs(d.id); s.star=!s.star; s.st=Date.now(); save(); render(); },   // st：收藏改動時間，同步合併時以較晚的一方為準
   vGrade(d){
     const V=ui.vocab, id=V.queue[V.idx], s=vsrs(id), g=+d.g;
     s.seen=(s.seen||0)+1;
@@ -799,14 +1004,16 @@ const ACTIONS = {
     if(!Array.isArray(data)){ ui.bank.msg={ok:false,text:'必須是陣列'}; render(); return; }
     let n=0;
     data.forEach(it=>{
-      if(!it.word||!it.meaning) return;
+      if(!it||!it.word||!it.meaning) return;
       const theme = THEMES.some(t=>t.key===it.theme)?it.theme:'quotidien';
       const freq = ['極高頻','高頻','中頻'].includes(it.freq)?it.freq:'中頻';
-      store.custom.vocab.push({
+      const w = {
         id:'f-c'+(store.custom.seq++), theme, themeName:(THEMES.find(t=>t.key===theme)||{}).name,
         word:it.word, pos:it.pos||'', meaning:it.meaning, example:it.example||'', exampleZh:it.exampleZh||'',
         collocations:[], freq, tip:it.tip||'', stars:{'極高頻':5,'高頻':4,'中頻':3}[freq]   /* v2：stars 由 freq 推算（極高頻5 高頻4 中頻3） */
-      });
+      };
+      w.at = Math.max(Date.now(), (store.custom.del[customKey(w)]||0)+1);   // 加入時間：比同內容的刪除標記新，同步時才不會又被刪掉
+      store.custom.vocab.push(w);
       n++;
     });
     save();
@@ -814,7 +1021,9 @@ const ACTIONS = {
     render();
   },
   bankDel(d){
-    store.custom.vocab = store.custom.vocab.filter(w=>w.id!==d.id);
+    const w = store.custom.vocab.find(x=>x.id===d.id);
+    if(w) store.custom.del[customKey(w)] = Math.max(Date.now(), (w.at||0)+1);   // 刪除標記：同步合併時不會被別台裝置的舊資料加回來
+    store.custom.vocab = store.custom.vocab.filter(x=>x.id!==d.id);
     save(); render();
   },
 
@@ -827,12 +1036,18 @@ const ACTIONS = {
     URL.revokeObjectURL(url);
   },
   impProgShow(){ ui.backupShow=true; render(); },
+
+  /* 雲端同步（Google Drive） */
+  gdChipClick(){ gdChipClick(); },
+  gdGoogleLogin(){ gdGoogleLogin(); },
+  gdSyncNow(){ if(gdHasIdentity()) gdPullAndMerge(); },
+  gdLogout(){ gdLogout(); },
   impProgDo(){
     const ta=document.getElementById('bk-ta');
     try{
       const s=JSON.parse(ta.value);
       if(!s||typeof s!=='object') throw new Error('格式錯誤');
-      store = Object.assign(defaults(), s);
+      store = normStore(Object.assign(defaults(), s));
       save();
       document.getElementById('bk-msg').innerHTML='<div class="imp-msg ok">匯入成功</div>';
       render();
@@ -859,8 +1074,642 @@ if(_voiceSelEl){
   });
 }
 
+/* === GD_MODULE_BEGIN ===
+   ── 雲端同步（Google Drive appDataFolder；移植自西文／英文模組的 GD_MODULE）──
+   登入 session 與首頁殼層、其他語言模組共用（localStorage.langhub_gd_session：token／email）；
+   token 過期時用 Android bridge 或瀏覽器 GIS 靜默重取，被擋彈窗時 chip 顯示「需重新連線」，
+   點擊後以使用者手勢重試。同步檔 langhub_fr_state.json 與英文、西文的檔案各自獨立。
+   防呆（與其他模組相同）：本頁成功 pull 並合併過一次之前不 push；只有 storeOwner === 登入 email 才 pull/push；
+   push 以 4 秒 debounce，頁面轉 hidden 時立即送出。 */
+var GD_WEB_CLIENT_ID = '1130644642-d627g1fmvg10bt3g8sh20nmk0guidc1v.apps.googleusercontent.com';
+var GD_SCOPES = 'openid email https://www.googleapis.com/auth/drive.appdata';
+var GD_FILE_NAME = 'langhub_fr_state.json';
+var GD_SESSION_KEY = 'langhub_fr_gd_session'; // 只存 {fileId, acct}（fileId 快取，僅同帳號時採用）
+var HUB_SESSION_KEY = 'langhub_gd_session';   // 首頁殼層與各語言模組共用的登入 session：{accessToken, expiresAt, email}
+
+var GD = {
+  session: null,          // 瀏覽器路 token 快取：{accessToken, expiresAt(epoch秒)}；Android 路不使用
+  email: null,
+  fileId: null,
+  syncing: false,
+  lastSyncAt: null,       // epoch ms
+  lastSyncStatus: null,   // 'ok' | 'fail' | 'offline' | null
+  envBlocked: false,      // fetch 對 Google API 完全被環境擋掉
+  banner: null,           // {text} 登入/同步錯誤訊息
+  needsInteraction: false,// GIS 靜默取 token 被擋下彈窗，需使用者手動點擊重試
+  pulledOnce: false,      // 本頁面是否已成功完成一次 pull；push 閘門依此判斷
+  cloudHadData: false,    // 本頁面 pull 是否曾看到雲端非空資料；gdPush 最後防線依此判斷
+};
+
+function gdNoteNetError(){ if(navigator.onLine!==false) GD.envBlocked = true; }
+
+/* ── session 中繼資料持久化 ── */
+function gdLoadSessionMeta(){
+  try{
+    var hub = null, own = null;
+    try{ hub = JSON.parse(localStorage.getItem(HUB_SESSION_KEY)||'null'); }catch(e){ hub = null; }
+    try{ own = JSON.parse(localStorage.getItem(GD_SESSION_KEY)||'null'); }catch(e){ own = null; }
+    if(hub && typeof hub==='object' && (hub.accessToken || hub.email)){
+      if(hub.accessToken && hub.expiresAt) GD.session = {accessToken:hub.accessToken, expiresAt:hub.expiresAt};
+      if(hub.email) GD.email = hub.email;
+    }
+    // fileId 快取只在屬於同一個帳號時採用
+    if(own && typeof own==='object' && own.fileId && own.acct && normEmail(own.acct)===normEmail(GD.email)) GD.fileId = own.fileId;
+  }catch(e){}
+}
+function gdClearSessionMeta(){
+  try{ localStorage.removeItem(HUB_SESSION_KEY); }catch(e){}
+  try{ localStorage.removeItem(GD_SESSION_KEY); }catch(e){}
+  GD.session = null; GD.email = null; GD.fileId = null;
+}
+function gdSaveSessionMeta(){
+  try{
+    var hubPayload = {
+      accessToken: (GD.session && GD.session.accessToken) || undefined,
+      expiresAt: (GD.session && GD.session.expiresAt) || undefined,
+      email: GD.email || undefined,
+    };
+    localStorage.setItem(HUB_SESSION_KEY, JSON.stringify(hubPayload));
+    localStorage.setItem(GD_SESSION_KEY, JSON.stringify({fileId: GD.fileId || undefined, acct: normEmail(GD.email) || undefined}));
+  }catch(e){}
+}
+
+/* ── Token provider：Android bridge 路 ──
+   契約：login(id)、requestToken(id) 非同步透過 window.__androidAuthCallback(id, result) 回呼，
+   result（物件或 JSON 字串皆可）為 {ok:true, accessToken, expiresAt} 或 {ok:false, error, message}；
+   isSignedIn() 為同步回傳 boolean；logout() 同步無回呼。 */
+function gdHasAndroidBridge(){
+  return typeof window!=='undefined' && typeof window.AndroidAuth==='object' && typeof window.AndroidAuth.requestToken==='function';
+}
+const _gdAndroidCallbacks = {};
+if(typeof window!=='undefined'){
+  window.__androidAuthCallback = function(id, result){
+    const cb = _gdAndroidCallbacks[id];
+    if(cb) cb(result);
+  };
+}
+let _gdAndroidSeq = 0;
+function gdAndroidCall(method){
+  return new Promise((resolve, reject)=>{
+    const id = 'gd_'+Date.now().toString(36)+'_'+(++_gdAndroidSeq);
+    let done = false;
+    const timer = setTimeout(()=>{
+      if(done) return;
+      done = true;
+      delete _gdAndroidCallbacks[id];
+      reject(new Error('android bridge timeout: '+method));
+    }, 30000);
+    _gdAndroidCallbacks[id] = function(result){
+      if(done) return;
+      done = true;
+      clearTimeout(timer);
+      delete _gdAndroidCallbacks[id];
+      let parsed = result;
+      if(typeof result==='string'){
+        try{ parsed = JSON.parse(result); }catch(e){ parsed = {ok:false, error:'parse_error', message:result}; }
+      }
+      resolve(parsed);
+    };
+    try{
+      window.AndroidAuth[method](id);
+    }catch(e){
+      if(done) return;
+      done = true;
+      clearTimeout(timer);
+      delete _gdAndroidCallbacks[id];
+      reject(e);
+    }
+  });
+}
+async function gdGetTokenAndroid(opts){
+  try{
+    let signedIn = false;
+    try{ signedIn = !!(window.AndroidAuth && window.AndroidAuth.isSignedIn()); }catch(e){ signedIn = false; }
+    if(!signedIn){
+      if(!opts.interactive) return {ok:false, error:'not_signed_in'};
+      const r = await gdAndroidCall('login');
+      if(!r || !r.ok) return {ok:false, error:(r&&r.error)||'login_failed', message:r&&r.message};
+      // AppAuth 回傳毫秒，統一轉秒與瀏覽器路一致
+      if(typeof r.expiresAt==='number') r.expiresAt = Math.floor(r.expiresAt/1000);
+      return r;
+    }
+    const r = await gdAndroidCall('requestToken');
+    if(!r || !r.ok) return {ok:false, error:(r&&r.error)||'token_failed', message:r&&r.message};
+    // AppAuth 回傳毫秒，統一轉秒與瀏覽器路一致
+    if(typeof r.expiresAt==='number') r.expiresAt = Math.floor(r.expiresAt/1000);
+    return r;
+  }catch(e){
+    gdNoteNetError();
+    return {ok:false, error:'exception', message:String((e&&e.message)||e)};
+  }
+}
+
+/* ── Token provider：瀏覽器 GIS 路 ──
+   file:// 開啟時不載入 GIS（OAuth redirect 回不來）。彈窗被擋（popup_closed/popup_failed_to_open）
+   回傳 needsInteraction:true，UI 顯示「點此重新連線」，使用者點擊後帶使用者手勢重試（interactive:true）。 */
+let _gdGisReady = null;
+function gdLoadGis(){
+  if(_gdGisReady) return _gdGisReady;
+  _gdGisReady = new Promise((resolve, reject)=>{
+    if(typeof location!=='undefined' && location.protocol==='file:'){ reject(new Error('file protocol: GIS unavailable')); return; }
+    if(typeof window!=='undefined' && window.google && window.google.accounts && window.google.accounts.oauth2){ resolve(); return; }
+    if(typeof document==='undefined'){ reject(new Error('no document')); return; }
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true; s.defer = true;
+    s.onload = ()=>resolve();
+    s.onerror = ()=>reject(new Error('failed to load GIS script'));
+    document.head.appendChild(s);
+  });
+  return _gdGisReady;
+}
+let _gdTokenClient = null;
+function gdEnsureTokenClient(){
+  if(_gdTokenClient) return _gdTokenClient;
+  _gdTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GD_WEB_CLIENT_ID,
+    scope: GD_SCOPES,
+    callback: ()=>{},
+    error_callback: ()=>{},
+  });
+  return _gdTokenClient;
+}
+function gdGetTokenBrowser(opts){
+  const cached = GD.session;
+  const now = Math.floor(Date.now()/1000);
+  if(cached && cached.accessToken && cached.expiresAt && (cached.expiresAt-now) > 120){
+    return Promise.resolve({ok:true, accessToken:cached.accessToken, expiresAt:cached.expiresAt});
+  }
+  return gdLoadGis().then(()=>new Promise((resolve)=>{
+    try{
+      const client = gdEnsureTokenClient();
+      client.callback = (resp)=>{
+        if(resp && resp.access_token){
+          const expiresIn = parseInt(resp.expires_in,10);
+          const expiresAt = Math.floor(Date.now()/1000) + (isNaN(expiresIn)?3600:expiresIn);
+          resolve({ok:true, accessToken:resp.access_token, expiresAt:expiresAt});
+        }else{
+          resolve({ok:false, error:'no_token'});
+        }
+      };
+      client.error_callback = (err)=>{
+        const type = err && err.type;
+        if(type==='popup_closed' || type==='popup_failed_to_open'){
+          resolve({ok:false, needsInteraction:true, error:type});
+        }else{
+          resolve({ok:false, error:(type||'gis_error')});
+        }
+      };
+      client.requestAccessToken({});
+    }catch(e){
+      resolve({ok:false, error:'exception', message:String((e&&e.message)||e)});
+    }
+  })).catch((e)=>({ok:false, error:'gis_load_failed', message:String((e&&e.message)||e)}));
+}
+
+/* 拿到 token 後查 email；失敗不影響同步流程（catch 吞掉）。 */
+async function gdFetchUserInfo(token){
+  try{
+    const res = await window.fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers:{ 'Authorization':'Bearer '+token },
+    });
+    if(res.ok){
+      const data = await res.json();
+      if(data && data.email) GD.email = data.email;
+    }
+  }catch(e){ /* 失敗不影響同步流程 */ }
+}
+
+/* 統一入口：依環境自動選 Android／瀏覽器路；成功時（瀏覽器路）快取 token 到 GD.session 並存 localStorage。 */
+async function gdGetToken(opts){
+  opts = opts || {};
+  const result = gdHasAndroidBridge() ? await gdGetTokenAndroid(opts) : await gdGetTokenBrowser(opts);
+  if(result && result.ok){
+    GD.needsInteraction = false;
+    if(!gdHasAndroidBridge()){
+      GD.session = {accessToken: result.accessToken, expiresAt: result.expiresAt};
+      gdSaveSessionMeta();
+    }
+  }else if(result && result.needsInteraction){
+    GD.needsInteraction = true;
+  }
+  return result;
+}
+function gdInvalidateToken(){
+  if(GD.session){ GD.session = {accessToken:null, expiresAt:0}; gdSaveSessionMeta(); }
+}
+function gdMarkSignedOut(){
+  GD.banner = {text:'Google 連線已失效，請重新登入'};
+  if(!gdHasAndroidBridge()){
+    GD.session = null;
+    gdSaveSessionMeta();
+  }
+}
+
+/* ── Drive API（純 fetch，v3）──
+   任一請求 401 → 清快取 token → 靜默重取一次 → 重試一次 → 仍 401 才視為失敗（登出狀態＋橫幅）。
+   404（快取的 fileId 已失效）由呼叫端（gdRead/gdUpdate）個別處理：清 fileId，重新 gdFindFile()。 */
+async function gdApiFetch(url, options){
+  options = options || {};
+  const tok = await gdGetToken({interactive:false});
+  if(!tok || !tok.ok){
+    if(tok && tok.needsInteraction) GD.needsInteraction = true;
+    const err = new Error('no_token'); err.code='no_token'; throw err;
+  }
+  const headers1 = Object.assign({}, options.headers||{}, {'Authorization':'Bearer '+tok.accessToken});
+  let res;
+  try{
+    res = await window.fetch(url, Object.assign({}, options, {headers:headers1}));
+  }catch(e){ gdNoteNetError(); throw e; }
+  if(res.status===401){
+    gdInvalidateToken();
+    const tok2 = await gdGetToken({interactive:false});
+    if(!tok2 || !tok2.ok){
+      gdMarkSignedOut();
+      const err = new Error('unauthorized'); err.code=401; throw err;
+    }
+    const headers2 = Object.assign({}, options.headers||{}, {'Authorization':'Bearer '+tok2.accessToken});
+    try{
+      res = await window.fetch(url, Object.assign({}, options, {headers:headers2}));
+    }catch(e){ gdNoteNetError(); throw e; }
+    if(res.status===401){
+      gdMarkSignedOut();
+      const err = new Error('unauthorized'); err.code=401; throw err;
+    }
+  }
+  return res;
+}
+async function gdFindFile(){
+  const res = await gdApiFetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q='+encodeURIComponent("name='"+GD_FILE_NAME+"'")+'&fields=files(id,modifiedTime)');
+  if(!res.ok) throw new Error('find failed '+res.status);
+  const data = await res.json();
+  const files = (data && data.files) || [];
+  if(files.length){
+    GD.fileId = files[0].id;
+    gdSaveSessionMeta();
+    return GD.fileId;
+  }
+  GD.fileId = null;
+  return null;
+}
+async function gdRead(fileId){
+  const res = await gdApiFetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId)+'?alt=media');
+  if(res.status===404){
+    GD.fileId = null;
+    gdSaveSessionMeta();
+    const err = new Error('not_found'); err.code=404; throw err;
+  }
+  if(!res.ok) throw new Error('read failed '+res.status);
+  return await res.json();
+}
+function gdMakeBody(){
+  return { store: store, updated_at: new Date().toISOString() };
+}
+function gdBuildMultipartBody(metadata, dataObj){
+  const boundary = 'gd_boundary_'+Math.random().toString(16).slice(2)+Date.now().toString(16);
+  const body = ''
+    +'--'+boundary+'\r\n'
+    +'Content-Type: application/json; charset=UTF-8\r\n\r\n'
+    +JSON.stringify(metadata)+'\r\n'
+    +'--'+boundary+'\r\n'
+    +'Content-Type: application/json\r\n\r\n'
+    +JSON.stringify(dataObj)+'\r\n'
+    +'--'+boundary+'--';
+  return { body: body, contentType: 'multipart/related; boundary='+boundary };
+}
+async function gdCreate(bodyObj, useKeepalive){
+  const built = gdBuildMultipartBody({name:GD_FILE_NAME, parents:['appDataFolder']}, bodyObj);
+  const res = await gdApiFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method:'POST',
+    headers:{'Content-Type':built.contentType},
+    body: built.body,
+    keepalive: !!useKeepalive,
+  });
+  if(!res.ok) throw new Error('create failed '+res.status);
+  const data = await res.json();
+  if(data && data.id){ GD.fileId = data.id; gdSaveSessionMeta(); }
+  return data;
+}
+async function gdCreateFromLocal(){
+  const data = await gdCreate(gdMakeBody());
+  gdSetStatus('ok');
+  return data;
+}
+async function gdUpdate(fileId, bodyObj, useKeepalive){
+  const res = await gdApiFetch('https://www.googleapis.com/upload/drive/v3/files/'+encodeURIComponent(fileId)+'?uploadType=media', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(bodyObj),
+    keepalive: !!useKeepalive,
+  });
+  if(res.status===404){
+    GD.fileId = null;
+    gdSaveSessionMeta();
+    const err = new Error('not_found'); err.code=404; throw err;
+  }
+  if(!res.ok) throw new Error('update failed '+res.status);
+  return true;
+}
+
+function gdFmtHM(ts){
+  var d = new Date(ts);
+  var p = function(n){ return String(n).padStart(2,'0'); };
+  return p(d.getHours())+':'+p(d.getMinutes());
+}
+
+/* 本機 store 是否有「有意義」的學習紀錄。
+   vsrs 只算複習過（seen>0）或收藏的卡：畫面渲染時 vsrs() 會替還沒看過的卡自動建一筆空紀錄，那不算。 */
+function gdStoreIsMeaningful(s){
+  if(!s || typeof s!=='object') return false;
+  var vs = s.vsrs||{}, qs = s.qstats||{}, c = s.custom||{}, id;
+  for(id in vs) if(vs[id] && (vs[id].seen>0 || vs[id].star)) return true;
+  for(id in qs) if(qs[id] && qs[id].a>0) return true;
+  if(Object.keys(s.history||{}).length) return true;
+  return (Array.isArray(c.vocab) && c.vocab.length>0) || Object.keys(c.del||{}).length>0;
+}
+
+/* 畫面更新：同步狀態改變只更新 chip 與「雲端同步」小節（不整頁重繪）；
+   紀錄內容真的變了（合併、換帳號）才整頁重繪，並保住使用者正在輸入的匯入文字框。 */
+function gdRenderChip(){
+  if(typeof document==='undefined' || !document) return;
+  var el = document.getElementById('cs-chip-slot');
+  if(el) el.innerHTML = gdChipHtml();
+  var sec = document.getElementById('gd-section-slot');
+  if(sec) sec.innerHTML = gdSectionHtml();
+}
+function gdRefreshView(){
+  if(typeof render!=='function') return;
+  var keep = {}, ids = ['imp-ta','bk-ta'];
+  var act = document.activeElement && document.activeElement.id;
+  ids.forEach(function(id){ var el=document.getElementById(id); if(el) keep[id]=el.value; });
+  render();
+  ids.forEach(function(id){ var el=document.getElementById(id); if(el && keep[id]){ el.value=keep[id]; if(act===id) el.focus(); } });
+}
+function gdSetStatus(state){
+  GD.syncing = (state==='syncing');
+  if(state==='ok' || state==='fail' || state==='offline'){
+    GD.lastSyncStatus = state;
+    GD.lastSyncAt = Date.now();
+    if(state==='fail' && GD.banner && typeof showToast==='function') showToast(GD.banner.text);
+  }
+  gdRenderChip();
+}
+
+function gdHasIdentity(){
+  if(gdHasAndroidBridge()){
+    try{ return !!(window.AndroidAuth && window.AndroidAuth.isSignedIn()); }catch(e){ return false; }
+  }
+  return !!GD.email;
+}
+
+/* 帳號隔離：確認登入 email，並把使用中的本機紀錄切到該帳號（見 ACCT_BEGIN）。
+   取不到 email 就回傳 false——不知道是誰的帳號時一律不同步，避免把別人的本機紀錄推上去。 */
+async function gdEnsureOwner(token){
+  if(!GD.email && token) await gdFetchUserInfo(token);
+  var email = normEmail(GD.email);
+  if(!email) return false;
+  if(acctSwitch(email)){ acctMaybeAdoptGuest(); gdRefreshView(); }
+  return storeOwner===email;
+}
+/* 下載雲端紀錄並用 mergeStore() 併入本機，再把合併結果推回雲端。
+   1) token 取不到／非 200／網路錯誤 → 只顯示失敗，不 merge、不 push，pulledOnce 維持原值。
+   2) 有雲端檔案且有 store → 併入本機→save→push。
+   3) 無雲端檔案或無 store → 本機有意義才首次上傳建檔；本機也空就什麼都不做。 */
+async function gdPullAndMerge(){
+  if(GD.syncing) return;
+  if(!gdHasIdentity()) return;
+  gdSetStatus('syncing');
+  try{
+    var tok = await gdGetToken({interactive:false});
+    if(!tok || !tok.ok){
+      if(tok && tok.needsInteraction){ GD.needsInteraction = true; GD.banner={text:'需要重新連線 Google 帳號，請點右上角同步狀態'}; }
+      else{ GD.banner = {text:'雲端同步失敗，稍後會自動重試'}; }
+      gdSetStatus('fail');
+      return;
+    }
+    if(!(await gdEnsureOwner(tok.accessToken))){
+      GD.banner = {text:'無法確認登入的 Google 帳號，已暫停同步（避免不同帳號資料混在一起）'};
+      gdSetStatus('fail');
+      return;
+    }
+    var owner = storeOwner;
+    var fileId = GD.fileId || await gdFindFile();
+    var cloud = null;
+    if(fileId){
+      try{
+        cloud = await gdRead(fileId);
+      }catch(e){
+        if(e && e.code===404){
+          fileId = await gdFindFile();
+          if(fileId) cloud = await gdRead(fileId);
+        }else{
+          throw e;
+        }
+      }
+    }
+    if(storeOwner!==owner) throw new Error('owner_changed'); // 拉取途中換了帳號：放棄這次結果
+    if(cloud && cloud.store && typeof cloud.store==='object'){
+      GD.cloudHadData = true;
+      GD.pulledOnce = true;
+      mergeStore(store, cloud.store);
+      save();
+      clearTimeout(_gdPushTimer);   // 下面馬上就 push，不需要 save() 排的那次 debounce push
+      gdRefreshView();
+      await gdPush(false, true /* skipEnsure：token 剛驗證過 */);
+    }else{
+      GD.pulledOnce = true;
+      if(gdStoreIsMeaningful(store)){
+        await gdCreate(gdMakeBody());
+      }
+      gdSetStatus('ok');
+    }
+  }catch(e){
+    if(navigator.onLine===false){ gdSetStatus('offline'); }
+    else{ GD.banner={text:'雲端同步失敗'}; gdSetStatus('fail'); }
+    // pulledOnce 刻意不變動：非成功時維持原值，push 閘門持續關閉
+  }
+}
+
+/* push：debounce 4 秒（由 save() 末尾掛勾觸發）；頁面 hidden 時立即 flush（keepalive:true）。
+   兩道防呆閘門，順序不可變：
+   a) pulledOnce 為 false（本頁尚未成功 pull 過一次）一律直接 return。
+   b) 待推 store 不 meaningful、且本頁曾 pull 到非空雲端資料 → 拒推＋警告（防禦縱深）。 */
+var _gdPushTimer = null;
+function gdSchedulePush(){
+  if(!gdHasIdentity()) return;
+  clearTimeout(_gdPushTimer);
+  _gdPushTimer = setTimeout(function(){ gdPush(false); }, 4000);
+}
+async function gdPush(useKeepalive, skipEnsure){
+  if(!gdHasIdentity()) return;
+  if(!GD.pulledOnce){ console.warn('[gd] push blocked: 本頁尚未成功完成一次 pull'); return; }
+  if(!storeOwner || storeOwner!==normEmail(GD.email)){ console.warn('[gd] push blocked: 本機紀錄不屬於目前登入的帳號'); return; }
+  var owner = storeOwner;
+  if(!gdStoreIsMeaningful(store) && GD.cloudHadData){
+    GD.banner = {text:'偵測到本機紀錄為空、雲端有資料，已阻止覆蓋——請先點同步狀態拉回雲端紀錄'};
+    gdSetStatus('fail');
+    return;
+  }
+  gdSetStatus('syncing');
+  try{
+    if(!skipEnsure){
+      var tok = await gdGetToken({interactive:false});
+      if(!tok || !tok.ok){
+        if(tok && tok.needsInteraction){ GD.needsInteraction = true; GD.banner={text:'需要重新連線 Google 帳號，請點右上角同步狀態'}; }
+        else{ GD.banner={text:'雲端同步失敗，稍後會自動重試'}; }
+        gdSetStatus('fail');
+        return;
+      }
+    }
+    var fileId = GD.fileId;
+    if(!fileId){ fileId = await gdFindFile(); }
+    if(storeOwner!==owner){ gdSetStatus('ok'); return; } // 途中換了帳號：不推
+    var body = gdMakeBody();
+    // 瀏覽器 keepalive body 上限約 64KB；超過門檻就不帶 keepalive（下次前景 pull 會補救）
+    var bodyLen = JSON.stringify(body).length;
+    var sendKeepalive = useKeepalive && bodyLen <= 60000;
+    if(useKeepalive && !sendKeepalive){ console.warn('[gd] body 超過 60KB，略過 keepalive'); }
+    if(fileId){
+      try{
+        await gdUpdate(fileId, body, sendKeepalive);
+      }catch(e){
+        if(e && e.code===404){ await gdCreate(body, sendKeepalive); }
+        else{ throw e; }
+      }
+    }else{
+      await gdCreate(body, sendKeepalive);
+    }
+    GD.banner = null;
+    gdSetStatus('ok');
+  }catch(e){
+    if(navigator.onLine===false){ gdSetStatus('offline'); }
+    else{ GD.banner={text:'雲端同步失敗，稍後會自動重試'}; gdSetStatus('fail'); }
+  }
+}
+
+/* 「使用 Google 登入」／「重新連線」：以使用者手勢取 token（interactive:true），寫回共用 session。 */
+async function gdGoogleLogin(){
+  GD.needsInteraction = false;
+  GD.banner = null;
+  gdSetStatus('syncing');
+  try{
+    var tok = await gdGetToken({interactive:true});
+    if(!tok || !tok.ok){
+      GD.needsInteraction = !!(tok && tok.needsInteraction);
+      GD.banner = {text: GD.needsInteraction ? '登入視窗被瀏覽器阻擋，請再點一次' : '登入失敗，請稍後再試（也可以回首頁登入）'};
+      gdSetStatus('fail');
+      return;
+    }
+    GD.email = null;                       // 以這次登入的帳號為準，重查 email
+    await gdFetchUserInfo(tok.accessToken);
+    gdSaveSessionMeta();
+    if(normEmail(GD.email)){ acctSwitch(GD.email); acctMaybeAdoptGuest(); }
+    gdRefreshView();
+    await gdPullAndMerge();
+  }catch(e){
+    GD.banner = {text:'登入失敗，請稍後再試（也可以回首頁登入）'};
+    gdSetStatus('fail');
+  }
+}
+/* 登出：清掉共用 session（首頁與其他模組一併登出）；帳號紀錄留在該帳號的 key，畫面換成未登入紀錄。 */
+function gdLogout(){
+  if(gdHasAndroidBridge()){
+    try{ window.AndroidAuth.logout(); }catch(e){}
+  }
+  clearTimeout(_gdPushTimer);
+  gdClearSessionMeta();
+  GD.banner = null; GD.lastSyncAt = null; GD.lastSyncStatus = null;
+  GD.pulledOnce = false; GD.cloudHadData = false; GD.needsInteraction = false;
+  acctSwitch(null);
+  render();
+}
+
+/* masthead 同步狀態 chip（cs-chip 系列 CSS 與英文／西文模組相同） */
+function gdChipInfo(){
+  if(!gdHasIdentity()) return {cls:'out', ic:'○', text: GD.needsInteraction?'需重新連線':'未登入'};
+  if(GD.syncing) return {cls:'busy', ic:'⟳', text:'同步中…'};
+  if(navigator.onLine===false || GD.lastSyncStatus==='offline') return {cls:'offline', ic:'📴', text:'離線'};
+  if(GD.lastSyncStatus==='fail') return {cls:'fail', ic:'⚠', text:'同步失敗'};
+  if(GD.lastSyncStatus==='ok' && GD.lastSyncAt) return {cls:'ok', ic:'☁', text:'已同步 '+gdFmtHM(GD.lastSyncAt)};
+  return {cls:'out', ic:'○', text:'待同步'};
+}
+function gdChipHtml(){
+  if(GD.envBlocked) return '';
+  var info = gdChipInfo();
+  var tip = '同步狀態：'+info.text+(GD.banner?('（'+GD.banner.text+'）'):'')+(gdHasIdentity()?(GD.email?'；帳號 '+GD.email:''):'；請回首頁登入 Google');
+  return '<button type="button" class="cs-chip cs-'+info.cls+'" data-act="gdChipClick" title="'+esc(tip)+'"><span class="cs-chip-ic">'+info.ic+'</span><span class="cs-chip-tx">'+esc(info.text)+'</span></button>';
+}
+/* 點 chip：需要重新連線就直接重連，否則帶到總覽的「雲端同步」小節 */
+function gdChipClick(){
+  if(GD.needsInteraction){ gdGoogleLogin(); return; }
+  ui.tab='home'; render();
+  var el = document.getElementById('data-card');
+  if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+/* 總覽「雲端同步」小節（內容比照英文模組） */
+function gdSectionHtml(){
+  var S = GD, body;
+  if(S.envBlocked){
+    return '<div class="lbl">雲端同步</div><p class="muted" style="font-size:13.5px;margin:0">此環境無法連線雲端，請用正式網址開啟</p>';
+  }
+  if(gdHasIdentity()){
+    var statusText = S.syncing ? '同步中…'
+      : (S.lastSyncAt ? ('上次同步：'+gdFmtHM(S.lastSyncAt)+'（'+(S.lastSyncStatus==='ok'?'✓成功':S.lastSyncStatus==='offline'?'離線':'✗失敗')+'）')
+      : '尚未同步');
+    body = '<div style="font-size:14px;margin-bottom:6px">'+(S.email ? ('已登入 <b>'+esc(S.email)+'</b>') : '已登入')+'</div>'
+      +'<div class="faint" style="font-size:12.5px;margin-bottom:10px">'+esc(statusText)+'</div>'
+      +(S.banner && S.lastSyncStatus==='fail' ? '<p class="muted" style="font-size:12.5px;margin:0 0 10px">'+esc(S.banner.text)+'</p>' : '')
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap">'
+      +(S.needsInteraction ? '<button class="btn primary small" data-act="gdGoogleLogin">重新連線</button>' : '')
+      +'<button class="btn ghost small" data-act="gdSyncNow"'+(S.syncing?' disabled':'')+'>立即同步</button>'
+      +'<button class="btn ghost small" data-act="gdLogout">登出</button>'
+      +'</div>';
+  }else if(location.protocol==='file:' && !gdHasAndroidBridge()){
+    body = '<p class="muted" style="font-size:13.5px;margin:0">以檔案方式開啟時無法登入 Google；請用正式網址開啟並登入，法文紀錄就會自動在你的裝置間同步。</p>';
+  }else{
+    body = '<p class="muted" style="font-size:13.5px;margin:0 0 10px">登入後，法文練習紀錄會自動在你的裝置間同步（與首頁、其他語言共用同一個 Google 登入）。</p>'
+      +(S.banner ? '<p class="muted" style="font-size:12.5px;margin:0 0 10px">'+esc(S.banner.text)+'</p>' : '')
+      +'<button class="btn primary small" data-act="gdGoogleLogin">'+(S.needsInteraction?'重新連線':'使用 Google 登入')+'</button>';
+  }
+  return '<div class="lbl">雲端同步</div>'+body;
+}
+
+/* 啟動流程：絕不阻塞首次渲染，全程 async 背景執行。 */
+async function gdInit(){
+  gdLoadSessionMeta();
+  // 共用 session 的 email 與使用中的本機紀錄不一致（例如在首頁換了帳號）→ 先切過去
+  if(acctSwitch(GD.email)) render();
+  if(storeOwner && acctMaybeAdoptGuest()) render();
+  if(gdHasIdentity()){
+    await gdPullAndMerge();
+  }
+}
+/* 首頁殼層（其他分頁）登入／登出／換帳號：重新讀 session，切到對應帳號的本機紀錄 */
+function gdOnSessionChanged(){
+  var before = normEmail(GD.email);
+  GD.session = null; GD.email = null; GD.fileId = null;
+  gdLoadSessionMeta();
+  if(normEmail(GD.email)===before && storeOwner===before) return;
+  GD.banner = null; GD.lastSyncAt = null; GD.lastSyncStatus = null; GD.needsInteraction = false;
+  if(acctSwitch(GD.email) && storeOwner) acctMaybeAdoptGuest();
+  gdRefreshView();
+  if(gdHasIdentity()) gdPullAndMerge();
+}
+/* === GD_MODULE_END === */
+
+window.addEventListener('online', function(){ gdPullAndMerge(); });
+window.addEventListener('offline', function(){ gdSetStatus('offline'); });
+window.addEventListener('storage', function(e){ if(e.key===HUB_SESSION_KEY || e.key===null) gdOnSessionChanged(); });
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState==='hidden'){ clearTimeout(_gdPushTimer); gdPush(true); }
+  else gdOnSessionChanged();   // 回到前景：重新核對登入帳號（沒變就什麼都不做）
+});
+/* 按「上一頁」從 bfcache 復原的頁面收不到 storage 事件：期間若在首頁換了帳號／登出，這裡補做切換 */
+window.addEventListener('pageshow', function(e){ if(e.persisted) gdOnSessionChanged(); });
+
 _fillVoiceSel();
 render();
+gdInit();
 /* 離線支援：與首頁、英文模組共用根目錄的 Service Worker */
 if('serviceWorker' in navigator && (location.protocol==='http:'||location.protocol==='https:')){
   try{ navigator.serviceWorker.register('../../sw.js').catch(()=>{}); }catch(e){}

@@ -248,7 +248,7 @@ function renderAcct(){
   $('btnLogout').onclick = logout;
 }
 
-/* acctScoped 模組（英文）的紀錄依登入帳號分 key：<storeKey>::<email 小寫>，未登入用 storeKey 本身 */
+/* acctScoped 模組（英文、法文、西文）的紀錄依登入帳號分 key：<storeKey>::<email 小寫>，未登入用 storeKey 本身 */
 function storeKeyOf(m){
   var em = session && typeof session.email==='string' ? session.email.trim().toLowerCase() : '';
   return (m.acctScoped && em) ? m.storeKey+'::'+em : m.storeKey;
