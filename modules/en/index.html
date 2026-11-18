@@ -1355,6 +1355,32 @@ function ensureBottomActionsVisible(){
 window.addEventListener('resize', ()=>{ syncTabsSafeArea(); ensureBottomActionsVisible(); });
 window.addEventListener('orientationchange', ()=>{ syncTabsSafeArea(); ensureBottomActionsVisible(); });
 
+/* ── 背景重畫時保住作答輸入框的焦點與游標位置 ──
+   render() 用 innerHTML 整塊重建 #view，裡面的 <input>／<textarea> 會變成新的 DOM 節點。
+   值雖然由模板的 value="..." 屬性還原，游標卻會回到位置 0：打到一半被 Drive 同步
+   等背景 render() 插一腳，後面打的字就會跑到最前面（例如 provide 打成 videpro）。
+   這裡在重建前記下 id、選取範圍與捲動位置，重建後找回同 id 的新節點原樣還原。
+   只處理支援 selectionStart 的輸入型別：email／number 等呼叫 setSelectionRange 會丟例外。 */
+const CARET_INPUT_TYPES = {text:1, search:1, url:1, tel:1, password:1};
+function captureCaret(v){
+  const el = document.activeElement;
+  if(!el || !el.id || !v || !v.contains(el)) return null;
+  const isTa = el.tagName==='TEXTAREA';
+  const isIn = el.tagName==='INPUT' && CARET_INPUT_TYPES[String(el.type||'text').toLowerCase()]===1;
+  if(!isTa && !isIn) return null;
+  let start=null, end=null;
+  try{ start=el.selectionStart; end=el.selectionEnd; }catch(e){}
+  return {id:el.id, start:start, end:end, scrollTop:v.scrollTop};
+}
+function restoreCaret(c){
+  if(!c) return;
+  const el = document.getElementById(c.id);
+  if(!el || el.disabled) return;
+  try{ el.focus({preventScroll:true}); }catch(e){ return; }
+  if(c.start==null) return;
+  try{ el.setSelectionRange(c.start, c.end==null?c.start:c.end); }catch(e){}
+}
+
 function render(){
   renderGlobalBanner();
   gdRenderChip();
@@ -1377,12 +1403,12 @@ function render(){
   /* 聲音／語速控制項是常駐 DOM（事件已綁定）：重畫前先收回暫存區，設定頁畫好後再搬進 #voice-slot */
   const vHolder=document.getElementById('voice-holder'), vSel=document.getElementById('voicesel'), vRate=document.getElementById('ratebtn');
   if(vHolder && vSel && vRate){ vHolder.appendChild(vSel); vHolder.appendChild(vRate); }
-  const typing = !!(document.activeElement && document.activeElement.id==='sessIn');   // 背景重畫時保住作答輸入框的焦點
+  const caret = captureCaret(v);   // 背景重畫會把輸入框換成新節點：先記下焦點、游標位置與捲動位置
   v.innerHTML = ({home:inSess?rSess:rHome, vocab:rVocab, quiz:rQuiz, read:rRead, fav:rFav, sent:rSent, fam:rFamTab, errs:rErrs, set:rSet, bank:rBank}[ui.tab]||rHome)();
   const vSlot=document.getElementById('voice-slot');
   if(vSlot && vSel && vRate){ vSlot.appendChild(vSel); vSlot.appendChild(vRate); }
-  if(typing) sessFocus();
-  v.scrollTop=0;
+  v.scrollTop = caret ? caret.scrollTop : 0;
+  restoreCaret(caret);
   sentMount();
   syncTabsSafeArea();
   ensureBottomActionsVisible();

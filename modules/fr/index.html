@@ -1441,9 +1441,13 @@ function gdRefreshView(){
   if(typeof render!=='function') return;
   var keep = {}, ids = ['imp-ta','bk-ta'];
   var act = document.activeElement && document.activeElement.id;
-  ids.forEach(function(id){ var el=document.getElementById(id); if(el) keep[id]=el.value; });
+  /* 背景同步重畫會把 textarea 換成新節點：除了值，也記下游標／選取範圍與 #view 捲動位置，
+     否則貼上或編輯到一半會被跳回開頭、畫面捲回頂端（與英文、西文模組同一類修正）。 */
+  var sel = null, v = document.getElementById('view'), top = v ? v.scrollTop : 0;
+  ids.forEach(function(id){ var el=document.getElementById(id); if(el){ keep[id]=el.value; if(act===id){ try{ sel=[el.selectionStart, el.selectionEnd]; }catch(e){} } } });
   render();
-  ids.forEach(function(id){ var el=document.getElementById(id); if(el && keep[id]){ el.value=keep[id]; if(act===id) el.focus(); } });
+  ids.forEach(function(id){ var el=document.getElementById(id); if(el && keep[id]){ el.value=keep[id]; if(act===id){ try{ el.focus({preventScroll:true}); }catch(e){} if(sel && sel[0]!=null){ try{ el.setSelectionRange(sel[0], sel[1]); }catch(e){} } } } });
+  if(v && (act==='imp-ta' || act==='bk-ta')) v.scrollTop = top;
 }
 function gdSetStatus(state){
   GD.syncing = (state==='syncing');

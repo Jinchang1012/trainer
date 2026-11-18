@@ -546,6 +546,30 @@ var TABS = [
 ];
 
 var wantTop=false;
+/* ── 背景重畫時保住輸入框的焦點與游標位置（與英文模組同一修法）──
+   render() 用 innerHTML 整塊重建 #view，輸入框會變成新的 DOM 節點：值由模板 value="..." 還原，
+   游標卻回到位置 0，打到一半被背景同步重畫插隊時，後面的字會跑到最前面。
+   restoreCaret() 有還原就回傳 true；否則 render() 維持舊行為，自動聚焦作答框 #typein。 */
+var CARET_INPUT_TYPES = {text:1, search:1, url:1, tel:1, password:1};
+function captureCaret(v){
+  var el = document.activeElement;
+  if(!el || !el.id || !v || !v.contains(el)) return null;
+  var isTa = el.tagName==='TEXTAREA';
+  var isIn = el.tagName==='INPUT' && CARET_INPUT_TYPES[String(el.type||'text').toLowerCase()]===1;
+  if(!isTa && !isIn) return null;
+  var start=null, end=null;
+  try{ start=el.selectionStart; end=el.selectionEnd; }catch(e){}
+  return {id:el.id, start:start, end:end};
+}
+function restoreCaret(c){
+  if(!c) return false;
+  var el = document.getElementById(c.id);
+  if(!el || el.disabled) return false;
+  try{ el.focus({preventScroll:true}); }catch(e){ return false; }
+  if(c.start!=null){ try{ el.setSelectionRange(c.start, c.end==null?c.start:c.end); }catch(e){} }
+  return true;
+}
+
 function render(){
   var dueN = dueList(ITEMS).length;
   document.getElementById('tabs').innerHTML = TABS.map(function(t){
@@ -555,8 +579,12 @@ function render(){
   updateRateBtn();
   gdRenderChip();
   var fn = {home:rHome,practice:rPractice,review:rReview,vocab:rVocab,bank:rBank}[ui.tab];
-  document.getElementById('view').innerHTML = fn();
-  var ti=document.getElementById('typein'); if(ti) try{ ti.focus(); }catch(e){}
+  var vEl = document.getElementById('view');
+  var caret = captureCaret(vEl);   // 背景重畫會把輸入框換成新節點：先記下焦點與游標位置
+  vEl.innerHTML = fn();
+  if(!restoreCaret(caret)){        // 沒有正在打字的輸入框 → 維持舊行為：自動聚焦作答框
+    var ti=document.getElementById('typein'); if(ti) try{ ti.focus(); }catch(e){}
+  }
   if(wantTop){ wantTop=false; window.scrollTo(0,0); }
 }
 
